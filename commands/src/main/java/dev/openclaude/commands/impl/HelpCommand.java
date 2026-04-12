@@ -18,6 +18,9 @@ public class HelpCommand implements Command {
         sb.append("    /cost         Show token usage and estimated cost\n");
         sb.append("    /permissions  Show/change permission mode\n");
         sb.append("    /status       Show session status\n");
+        sb.append("    /diff         Show git diff of uncommitted changes\n");
+        sb.append("    /export       Export conversation to markdown\n");
+        sb.append("    /doctor       Check environment and configuration\n");
         sb.append("    /compact      Summarize conversation to save context\n");
         sb.append("    /reset        Reset the conversation\n");
         sb.append("    /exit         Exit the REPL\n");

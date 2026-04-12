@@ -140,9 +140,11 @@ public class AgentDisplay {
 
     public void showWelcome(String provider, String model, int toolCount) {
         screen.println();
-        screen.println(Ansi.BOLD + "  openclaude-java" + Ansi.RESET + Ansi.DIM + " v0.1.0" + Ansi.RESET);
-        screen.println(Ansi.DIM + "  " + provider + " / " + model + " | " + toolCount + " tools" + Ansi.RESET);
-        screen.println(Ansi.DIM + "  Type your prompt. Ctrl+D to exit." + Ansi.RESET);
+        screen.println(Ansi.BOLD + Ansi.CYAN + "  ╭─ openclaude-java" + Ansi.RESET + Ansi.DIM + " v0.1.0" + Ansi.RESET);
+        screen.println(Ansi.CYAN + "  │" + Ansi.RESET + Ansi.DIM + "  " + provider + " / " + model + Ansi.RESET);
+        screen.println(Ansi.CYAN + "  │" + Ansi.RESET + Ansi.DIM + "  " + toolCount + " tools available" + Ansi.RESET);
+        screen.println(Ansi.CYAN + "  │" + Ansi.RESET + Ansi.DIM + "  cwd: " + System.getProperty("user.dir") + Ansi.RESET);
+        screen.println(Ansi.CYAN + "  ╰─" + Ansi.RESET + Ansi.DIM + " Type /help for commands. Ctrl+D to exit." + Ansi.RESET);
         screen.println();
     }
 

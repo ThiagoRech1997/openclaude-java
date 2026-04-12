@@ -19,6 +19,9 @@ public final class CommandRegistryFactory {
         registry.register(new ResetCommand());
         registry.register(new StatusCommand());
         registry.register(new CompactCommand());
+        registry.register(new DiffCommand());
+        registry.register(new ExportCommand());
+        registry.register(new DoctorCommand());
         return registry;
     }
 }

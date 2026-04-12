@@ -16,6 +16,7 @@ import dev.openclaude.tools.grep.GrepTool;
 import dev.openclaude.tools.agent.AgentTool;
 import dev.openclaude.engine.SubAgentRunner;
 import dev.openclaude.plugins.PluginLoader;
+import dev.openclaude.grpc.GrpcAgentServer;
 import dev.openclaude.mcp.McpClientManager;
 import dev.openclaude.mcp.McpToolBridge;
 import dev.openclaude.mcp.config.McpConfigLoader;
@@ -55,12 +56,35 @@ public class Main implements Callable<Integer> {
     @Option(names = {"-p", "--print"}, description = "Print mode: single prompt, no REPL.")
     private boolean printMode;
 
+    @Option(names = {"--serve"}, description = "Start headless JSON-over-TCP server.")
+    private boolean serveMode;
+
+    @Option(names = {"--port"}, description = "Port for headless server (default: 9818).", defaultValue = "9818")
+    private int port;
+
     @Override
     public Integer call() {
         AppConfig config = AppConfig.load();
 
         if (model != null) {
             config = new AppConfig(config.apiKey(), model, config.baseUrl(), config.provider(), config.maxTokens());
+        }
+
+        // Headless server mode
+        if (serveMode) {
+            config.validate();
+            LlmClient client = LlmClientFactory.create(config);
+            ToolRegistry tools = createToolRegistry(client, config);
+
+            GrpcAgentServer server = new GrpcAgentServer(
+                    client, tools, config.model(), systemPrompt, config.maxTokens(), port);
+            try {
+                server.start();
+            } catch (Exception e) {
+                System.err.println("Server failed: " + e.getMessage());
+                return 1;
+            }
+            return 0;
         }
 
         // No prompt and no print mode = interactive REPL
