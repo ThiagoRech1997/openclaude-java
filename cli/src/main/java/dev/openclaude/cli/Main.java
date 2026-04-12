@@ -13,6 +13,9 @@ import dev.openclaude.tools.fileread.FileReadTool;
 import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
+import dev.openclaude.tools.agent.AgentTool;
+import dev.openclaude.engine.SubAgentRunner;
+import dev.openclaude.plugins.PluginLoader;
 import dev.openclaude.mcp.McpClientManager;
 import dev.openclaude.mcp.McpToolBridge;
 import dev.openclaude.mcp.config.McpConfigLoader;
@@ -64,7 +67,7 @@ public class Main implements Callable<Integer> {
         if (prompt == null && !printMode) {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
-            ToolRegistry tools = createToolRegistry();
+            ToolRegistry tools = createToolRegistry(client, config);
             Path cwd = Path.of(System.getProperty("user.dir"));
 
             CommandRegistry commands = new CommandRegistryFactory().create();
@@ -86,7 +89,7 @@ public class Main implements Callable<Integer> {
         config.validate();
 
         LlmClient client = LlmClientFactory.create(config);
-        ToolRegistry tools = createToolRegistry();
+        ToolRegistry tools = createToolRegistry(client, config);
         Path cwd = Path.of(System.getProperty("user.dir"));
 
         System.out.println(Ansi.DIM + config.provider() + " / " + config.model()
@@ -136,7 +139,7 @@ public class Main implements Callable<Integer> {
         }
     }
 
-    private ToolRegistry createToolRegistry() {
+    private ToolRegistry createToolRegistry(LlmClient client, AppConfig config) {
         ToolRegistry registry = new ToolRegistry();
         registry.register(new BashTool());
         registry.register(new FileReadTool());
@@ -144,6 +147,17 @@ public class Main implements Callable<Integer> {
         registry.register(new FileEditTool());
         registry.register(new GlobTool());
         registry.register(new GrepTool());
+
+        // AgentTool (sub-agents)
+        SubAgentRunner agentRunner = new SubAgentRunner(client, registry, config.model(), config.maxTokens());
+        registry.register(new AgentTool(agentRunner));
+
+        // Load plugins
+        PluginLoader pluginLoader = new PluginLoader();
+        pluginLoader.loadAll();
+        for (var tool : pluginLoader.allTools()) {
+            registry.register(tool);
+        }
 
         // Load MCP tools from config
         loadMcpTools(registry);
