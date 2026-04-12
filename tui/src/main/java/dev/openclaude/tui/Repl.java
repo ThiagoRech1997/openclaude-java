@@ -1,6 +1,9 @@
 package dev.openclaude.tui;
 
+import dev.openclaude.commands.*;
 import dev.openclaude.core.config.AppConfig;
+import dev.openclaude.core.permissions.PermissionManager;
+import dev.openclaude.core.session.SessionManager;
 import dev.openclaude.engine.QueryEngine;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
@@ -12,7 +15,7 @@ import java.nio.file.Path;
 
 /**
  * Interactive REPL (Read-Eval-Print Loop) for the coding agent.
- * Handles user input, sends to QueryEngine, and displays results.
+ * Now integrated with CommandRegistry, PermissionManager, and SessionManager.
  */
 public class Repl {
 
@@ -21,14 +24,21 @@ public class Repl {
     private final ToolRegistry toolRegistry;
     private final Path workingDirectory;
     private final String systemPrompt;
+    private final CommandRegistry commandRegistry;
+    private final PermissionManager permissions;
+    private final SessionManager session;
 
     public Repl(AppConfig config, LlmClient client, ToolRegistry toolRegistry,
-                Path workingDirectory, String systemPrompt) {
+                Path workingDirectory, String systemPrompt,
+                CommandRegistry commandRegistry, PermissionManager permissions) {
         this.config = config;
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.workingDirectory = workingDirectory;
         this.systemPrompt = systemPrompt;
+        this.commandRegistry = commandRegistry;
+        this.permissions = permissions;
+        this.session = new SessionManager();
     }
 
     /**
@@ -41,11 +51,14 @@ public class Repl {
 
             display.showWelcome(config.provider(), config.model(), toolRegistry.size());
 
+            CommandContext cmdCtx = new CommandContext(
+                    config, toolRegistry, permissions, session,
+                    workingDirectory, screen.getWidth());
+
             while (true) {
                 String userInput = input.readLineSafe();
 
                 if (userInput == null) {
-                    // Ctrl+D or Ctrl+C
                     screen.println();
                     screen.println(Ansi.DIM + "  Goodbye!" + Ansi.RESET);
                     screen.println();
@@ -53,28 +66,32 @@ public class Repl {
                 }
 
                 String trimmed = userInput.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
+                if (trimmed.isEmpty()) continue;
 
-                // Handle built-in commands
+                // Handle slash commands
                 if (trimmed.startsWith("/")) {
-                    if (handleCommand(trimmed, screen)) {
+                    CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
+                    if (result != null) {
+                        handleCommandResult(result, screen);
                         continue;
                     }
                 }
 
-                // Show user prompt echoed
-                screen.println();
-
                 // Run the agent
+                screen.println();
+                session.incrementTurn();
+
                 QueryEngine engine = new QueryEngine(
                         client, toolRegistry, config.model(), systemPrompt,
-                        config.maxTokens(), workingDirectory, display::handleEvent
-                );
+                        config.maxTokens(), workingDirectory, event -> {
+                    display.handleEvent(event);
+                    // Track usage
+                    if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
+                        session.addUsage(done.totalUsage());
+                    }
+                });
 
                 engine.run(trimmed);
-
                 screen.println();
             }
         } catch (IOException e) {
@@ -82,56 +99,29 @@ public class Repl {
         }
     }
 
-    /**
-     * Handle slash commands. Returns true if the command was handled.
-     */
-    private boolean handleCommand(String command, TerminalScreen screen) {
-        return switch (command.toLowerCase()) {
-            case "/exit", "/quit", "/q" -> {
+    private void handleCommandResult(CommandResult result, TerminalScreen screen) {
+        if (result.output() != null) {
+            screen.println(result.output());
+        }
+
+        switch (result.action()) {
+            case EXIT -> {
                 screen.println();
                 screen.println(Ansi.DIM + "  Goodbye!" + Ansi.RESET);
                 screen.println();
                 System.exit(0);
-                yield true;
             }
-            case "/help", "/h" -> {
-                screen.println();
-                screen.println(Ansi.BOLD + "  Available commands:" + Ansi.RESET);
-                screen.println(Ansi.CYAN + "    /help" + Ansi.RESET + "     Show this help");
-                screen.println(Ansi.CYAN + "    /clear" + Ansi.RESET + "    Clear the screen");
-                screen.println(Ansi.CYAN + "    /model" + Ansi.RESET + "    Show current model");
-                screen.println(Ansi.CYAN + "    /tools" + Ansi.RESET + "    List available tools");
-                screen.println(Ansi.CYAN + "    /exit" + Ansi.RESET + "     Exit the REPL");
-                screen.println();
-                yield true;
-            }
-            case "/clear", "/cls" -> {
+            case CLEAR -> {
                 screen.print(Ansi.CLEAR_SCREEN + Ansi.HOME);
-                yield true;
             }
-            case "/model" -> {
+            case RESET -> {
+                // Session already cleared by the command
                 screen.println();
-                screen.println(Ansi.DIM + "  Provider: " + Ansi.RESET + config.provider());
-                screen.println(Ansi.DIM + "  Model: " + Ansi.RESET + config.model());
-                screen.println();
-                yield true;
             }
-            case "/tools" -> {
+            case CONTINUE -> {
                 screen.println();
-                screen.println(Ansi.BOLD + "  Available tools (" + toolRegistry.size() + "):" + Ansi.RESET);
-                for (var tool : toolRegistry.allTools()) {
-                    String ro = tool.isReadOnly() ? Ansi.DIM + " (read-only)" + Ansi.RESET : "";
-                    screen.println(Ansi.CYAN + "    " + tool.name() + Ansi.RESET + " — " + tool.description() + ro);
-                }
-                screen.println();
-                yield true;
             }
-            default -> {
-                screen.println(Ansi.YELLOW + "  Unknown command: " + command + Ansi.RESET);
-                screen.println(Ansi.DIM + "  Type /help for available commands." + Ansi.RESET);
-                yield true;
-            }
-        };
+        }
     }
 
     private String promptString() {

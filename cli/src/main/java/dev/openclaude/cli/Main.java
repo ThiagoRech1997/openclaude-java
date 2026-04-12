@@ -17,6 +17,9 @@ import dev.openclaude.mcp.McpClientManager;
 import dev.openclaude.mcp.McpToolBridge;
 import dev.openclaude.mcp.config.McpConfigLoader;
 import dev.openclaude.mcp.config.McpServerConfig;
+import dev.openclaude.commands.CommandRegistry;
+import dev.openclaude.commands.CommandRegistryFactory;
+import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.tui.Ansi;
 import dev.openclaude.tui.Repl;
 import picocli.CommandLine;
@@ -64,7 +67,10 @@ public class Main implements Callable<Integer> {
             ToolRegistry tools = createToolRegistry();
             Path cwd = Path.of(System.getProperty("user.dir"));
 
-            Repl repl = new Repl(config, client, tools, cwd, systemPrompt);
+            CommandRegistry commands = new CommandRegistryFactory().create();
+            PermissionManager permissions = new PermissionManager();
+
+            Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions);
             repl.start();
             return 0;
         }

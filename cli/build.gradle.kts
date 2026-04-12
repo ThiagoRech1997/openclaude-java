@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":tools"))
     implementation(project(":engine"))
     implementation(project(":mcp"))
+    implementation(project(":commands"))
     implementation(project(":tui"))
     implementation("info.picocli:picocli:4.7.6")
     annotationProcessor("info.picocli:picocli-codegen:4.7.6")
