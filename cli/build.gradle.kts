@@ -10,6 +10,8 @@ application {
 dependencies {
     implementation(project(":core"))
     implementation(project(":llm"))
+    implementation(project(":tools"))
+    implementation(project(":engine"))
     implementation("info.picocli:picocli:4.7.6")
     annotationProcessor("info.picocli:picocli-codegen:4.7.6")
 }

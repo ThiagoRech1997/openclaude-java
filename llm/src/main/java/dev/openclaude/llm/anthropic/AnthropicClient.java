@@ -86,6 +86,10 @@ public class AnthropicClient implements LlmClient {
             root.put("system", request.systemPrompt());
         }
 
+        if (request.tools() != null && !request.tools().isEmpty()) {
+            root.set("tools", request.tools());
+        }
+
         ArrayNode messagesArray = root.putArray("messages");
         for (Message msg : request.messages()) {
             ObjectNode msgNode = messagesArray.addObject();
