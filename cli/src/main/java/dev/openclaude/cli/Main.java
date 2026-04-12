@@ -13,6 +13,8 @@ import dev.openclaude.tools.fileread.FileReadTool;
 import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
+import dev.openclaude.tui.Ansi;
+import dev.openclaude.tui.Repl;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Parameters;
@@ -29,13 +31,7 @@ import java.util.concurrent.Callable;
 )
 public class Main implements Callable<Integer> {
 
-    private static final String DIM = "\u001b[90m";
-    private static final String RED = "\u001b[31m";
-    private static final String YELLOW = "\u001b[33m";
-    private static final String CYAN = "\u001b[36m";
-    private static final String RESET = "\u001b[0m";
-
-    @Parameters(index = "0", arity = "0..1", description = "Initial prompt to send.")
+    @Parameters(index = "0", arity = "0..1", description = "Initial prompt (omit for interactive REPL).")
     private String prompt;
 
     @Option(names = {"-m", "--model"}, description = "Model to use.")
@@ -45,6 +41,9 @@ public class Main implements Callable<Integer> {
             defaultValue = "You are a helpful coding assistant. You have access to tools for reading, writing, and editing files, running bash commands, and searching code. Use them when appropriate to help the user.")
     private String systemPrompt;
 
+    @Option(names = {"-p", "--print"}, description = "Print mode: single prompt, no REPL.")
+    private boolean printMode;
+
     @Override
     public Integer call() {
         AppConfig config = AppConfig.load();
@@ -53,10 +52,23 @@ public class Main implements Callable<Integer> {
             config = new AppConfig(config.apiKey(), model, config.baseUrl(), config.provider(), config.maxTokens());
         }
 
+        // No prompt and no print mode = interactive REPL
+        if (prompt == null && !printMode) {
+            config.validate();
+            LlmClient client = LlmClientFactory.create(config);
+            ToolRegistry tools = createToolRegistry();
+            Path cwd = Path.of(System.getProperty("user.dir"));
+
+            Repl repl = new Repl(config, client, tools, cwd, systemPrompt);
+            repl.start();
+            return 0;
+        }
+
+        // Print mode or single prompt
         if (prompt == null || prompt.isBlank()) {
             System.out.println("openclaude-java v0.1.0");
-            System.out.println("Usage: openclaude \"your prompt here\"");
-            System.out.println("Interactive REPL mode coming in Phase 3.");
+            System.out.println("Usage: openclaude [prompt]       Interactive REPL (or single prompt)");
+            System.out.println("       openclaude -p \"prompt\"    Print mode (non-interactive)");
             return 0;
         }
 
@@ -66,13 +78,13 @@ public class Main implements Callable<Integer> {
         ToolRegistry tools = createToolRegistry();
         Path cwd = Path.of(System.getProperty("user.dir"));
 
-        System.out.println(DIM + config.provider() + " / " + config.model()
-                + " | " + tools.size() + " tools" + RESET);
+        System.out.println(Ansi.DIM + config.provider() + " / " + config.model()
+                + " | " + tools.size() + " tools" + Ansi.RESET);
         System.out.println();
 
         QueryEngine engine = new QueryEngine(
                 client, tools, config.model(), systemPrompt,
-                config.maxTokens(), cwd, this::handleEvent
+                config.maxTokens(), cwd, this::handlePrintEvent
         );
 
         engine.run(prompt);
@@ -80,40 +92,36 @@ public class Main implements Callable<Integer> {
         return 0;
     }
 
-    private void handleEvent(EngineEvent event) {
+    private void handlePrintEvent(EngineEvent event) {
         if (event instanceof EngineEvent.Stream s) {
-            handleStreamEvent(s.event());
+            StreamEvent se = s.event();
+            if (se instanceof StreamEvent.TextDelta td) {
+                System.out.print(td.text());
+                System.out.flush();
+            } else if (se instanceof StreamEvent.ThinkingDelta th) {
+                System.out.print(Ansi.DIM + th.thinking() + Ansi.RESET);
+                System.out.flush();
+            } else if (se instanceof StreamEvent.Error err) {
+                System.err.println(Ansi.RED + "Error: " + err.message() + Ansi.RESET);
+            }
         } else if (event instanceof EngineEvent.ToolExecutionStart tes) {
             System.out.println();
-            System.out.print(CYAN + "  ⚡ " + tes.toolName() + RESET + " ");
+            System.out.print(Ansi.CYAN + "  ⚡ " + tes.toolName() + Ansi.RESET + " ");
             System.out.flush();
         } else if (event instanceof EngineEvent.ToolExecutionEnd tee) {
             if (tee.result().isError()) {
-                System.out.println(RED + "✗" + RESET);
-                System.out.println(DIM + "  Error: " + truncate(tee.result().content(), 200) + RESET);
+                System.out.println(Ansi.RED + "✗" + Ansi.RESET);
             } else {
-                System.out.println(DIM + "✓" + RESET);
+                System.out.println(Ansi.DIM + "✓" + Ansi.RESET);
             }
         } else if (event instanceof EngineEvent.Done done) {
             System.out.println();
-            System.out.printf(DIM + "[tokens: %d in / %d out | %d loop(s)]" + RESET + "%n",
+            System.out.printf(Ansi.DIM + "[tokens: %d in / %d out | %d turn(s)]" + Ansi.RESET + "%n",
                     done.totalUsage().inputTokens(),
                     done.totalUsage().outputTokens(),
                     done.loopCount());
         } else if (event instanceof EngineEvent.Error err) {
-            System.err.println(RED + "Error: " + err.message() + RESET);
-        }
-    }
-
-    private void handleStreamEvent(StreamEvent event) {
-        if (event instanceof StreamEvent.TextDelta td) {
-            System.out.print(td.text());
-            System.out.flush();
-        } else if (event instanceof StreamEvent.ThinkingDelta th) {
-            System.out.print(DIM + th.thinking() + RESET);
-            System.out.flush();
-        } else if (event instanceof StreamEvent.Error err) {
-            System.err.println(RED + "Stream error: " + err.message() + RESET);
+            System.err.println(Ansi.RED + "Error: " + err.message() + Ansi.RESET);
         }
     }
 
@@ -126,11 +134,6 @@ public class Main implements Callable<Integer> {
         registry.register(new GlobTool());
         registry.register(new GrepTool());
         return registry;
-    }
-
-    private String truncate(String s, int maxLen) {
-        if (s == null) return "";
-        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 
     public static void main(String[] args) {
