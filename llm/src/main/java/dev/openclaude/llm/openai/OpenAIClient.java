@@ -40,6 +40,7 @@ public class OpenAIClient implements LlmClient {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
+                .version(HttpClient.Version.HTTP_1_1)
                 .build();
     }
 
@@ -215,6 +216,15 @@ public class OpenAIClient implements LlmClient {
                         ? choice.get("finish_reason").asText() : null;
 
                 if (delta != null) {
+                    // Reasoning content (thinking) — emitted by Gemma, DeepSeek R1,
+                    // Qwen QwQ, and other reasoning models via LM Studio / vLLM.
+                    if (delta.has("reasoning_content") && !delta.get("reasoning_content").isNull()) {
+                        String thinking = delta.get("reasoning_content").asText();
+                        if (!thinking.isEmpty()) {
+                            handler.accept(new StreamEvent.ThinkingDelta(thinking));
+                        }
+                    }
+
                     // Text content
                     if (delta.has("content") && !delta.get("content").isNull()) {
                         String text = delta.get("content").asText();

@@ -4,7 +4,11 @@ plugins {
 
 application {
     mainClass.set("dev.openclaude.cli.Main")
-    applicationDefaultJvmArgs = listOf()
+    applicationDefaultJvmArgs = listOf("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8")
+}
+
+tasks.named<JavaExec>("run") {
+    standardInput = System.`in`
 }
 
 dependencies {
