@@ -13,6 +13,10 @@ import dev.openclaude.tools.fileread.FileReadTool;
 import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
+import dev.openclaude.mcp.McpClientManager;
+import dev.openclaude.mcp.McpToolBridge;
+import dev.openclaude.mcp.config.McpConfigLoader;
+import dev.openclaude.mcp.config.McpServerConfig;
 import dev.openclaude.tui.Ansi;
 import dev.openclaude.tui.Repl;
 import picocli.CommandLine;
@@ -21,6 +25,7 @@ import picocli.CommandLine.Parameters;
 import picocli.CommandLine.Option;
 
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.concurrent.Callable;
 
 @Command(
@@ -133,7 +138,35 @@ public class Main implements Callable<Integer> {
         registry.register(new FileEditTool());
         registry.register(new GlobTool());
         registry.register(new GrepTool());
+
+        // Load MCP tools from config
+        loadMcpTools(registry);
+
         return registry;
+    }
+
+    private void loadMcpTools(ToolRegistry registry) {
+        Path cwd = Path.of(System.getProperty("user.dir"));
+        Map<String, McpServerConfig> mcpConfigs = McpConfigLoader.load(cwd);
+
+        if (mcpConfigs.isEmpty()) return;
+
+        System.out.println(Ansi.DIM + "  Connecting to " + mcpConfigs.size() + " MCP server(s)..." + Ansi.RESET);
+
+        McpClientManager mcpManager = new McpClientManager();
+        mcpManager.connectAll(mcpConfigs);
+
+        for (var server : mcpManager.allServers()) {
+            if (server instanceof dev.openclaude.mcp.McpServer.Connected c) {
+                System.out.println(Ansi.DIM + "  ✓ " + c.name() + " (" + c.tools().size() + " tools)" + Ansi.RESET);
+            } else if (server instanceof dev.openclaude.mcp.McpServer.Failed f) {
+                System.out.println(Ansi.YELLOW + "  ✗ " + f.name() + ": " + f.error() + Ansi.RESET);
+            }
+        }
+
+        for (var tool : McpToolBridge.createTools(mcpManager)) {
+            registry.register(tool);
+        }
     }
 
     public static void main(String[] args) {
