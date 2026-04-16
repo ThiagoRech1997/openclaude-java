@@ -14,6 +14,7 @@ import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
 import dev.openclaude.tools.webfetch.WebFetchTool;
+import dev.openclaude.tools.websearch.WebSearchTool;
 import dev.openclaude.tools.agent.AgentTool;
 import dev.openclaude.engine.SubAgentRunner;
 import dev.openclaude.plugins.PluginLoader;
@@ -173,6 +174,7 @@ public class Main implements Callable<Integer> {
         registry.register(new GlobTool());
         registry.register(new GrepTool());
         registry.register(new WebFetchTool());
+        registry.register(new WebSearchTool());
 
         // AgentTool (sub-agents)
         SubAgentRunner agentRunner = new SubAgentRunner(client, registry, config.model(), config.maxTokens());
