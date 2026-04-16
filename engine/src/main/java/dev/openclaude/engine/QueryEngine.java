@@ -33,6 +33,7 @@ public class QueryEngine {
     private final int maxTokens;
     private final Path workingDirectory;
     private final Consumer<EngineEvent> eventHandler;
+    private final BackgroundAgentManager backgroundManager;
 
     public QueryEngine(
             LlmClient client,
@@ -43,6 +44,19 @@ public class QueryEngine {
             Path workingDirectory,
             Consumer<EngineEvent> eventHandler
     ) {
+        this(client, toolRegistry, model, systemPrompt, maxTokens, workingDirectory, eventHandler, null);
+    }
+
+    public QueryEngine(
+            LlmClient client,
+            ToolRegistry toolRegistry,
+            String model,
+            String systemPrompt,
+            int maxTokens,
+            Path workingDirectory,
+            Consumer<EngineEvent> eventHandler,
+            BackgroundAgentManager backgroundManager
+    ) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
@@ -50,6 +64,7 @@ public class QueryEngine {
         this.maxTokens = maxTokens;
         this.workingDirectory = workingDirectory;
         this.eventHandler = eventHandler;
+        this.backgroundManager = backgroundManager;
     }
 
     /**
@@ -65,6 +80,17 @@ public class QueryEngine {
 
         while (loopCount < MAX_TOOL_LOOPS) {
             loopCount++;
+
+            // Poll for completed background agents
+            if (backgroundManager != null) {
+                for (var completed : backgroundManager.pollCompleted()) {
+                    eventHandler.accept(new EngineEvent.BackgroundAgentDone(
+                            completed.description(), completed.result()));
+                    String notification = "[Background agent completed: " + completed.description() + "]\n\n"
+                            + completed.result();
+                    messages.add(new Message.UserMessage(notification));
+                }
+            }
 
             // Build request with tools
             LlmRequest request = new LlmRequest(model, systemPrompt, messages, maxTokens)

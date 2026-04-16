@@ -4,6 +4,7 @@ import dev.openclaude.commands.*;
 import dev.openclaude.core.config.AppConfig;
 import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.core.session.SessionManager;
+import dev.openclaude.engine.BackgroundAgentManager;
 import dev.openclaude.engine.QueryEngine;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
@@ -27,10 +28,12 @@ public class Repl {
     private final CommandRegistry commandRegistry;
     private final PermissionManager permissions;
     private final SessionManager session;
+    private final BackgroundAgentManager backgroundManager;
 
     public Repl(AppConfig config, LlmClient client, ToolRegistry toolRegistry,
                 Path workingDirectory, String systemPrompt,
-                CommandRegistry commandRegistry, PermissionManager permissions) {
+                CommandRegistry commandRegistry, PermissionManager permissions,
+                BackgroundAgentManager backgroundManager) {
         this.config = config;
         this.client = client;
         this.toolRegistry = toolRegistry;
@@ -39,6 +42,7 @@ public class Repl {
         this.commandRegistry = commandRegistry;
         this.permissions = permissions;
         this.session = new SessionManager();
+        this.backgroundManager = backgroundManager;
     }
 
     /**
@@ -89,7 +93,7 @@ public class Repl {
                     if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
                         session.addUsage(done.totalUsage());
                     }
-                });
+                }, backgroundManager);
 
                 engine.run(trimmed);
                 screen.println();

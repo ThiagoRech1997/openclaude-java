@@ -2,6 +2,7 @@ package dev.openclaude.cli;
 
 import dev.openclaude.core.config.AppConfig;
 import dev.openclaude.core.model.*;
+import dev.openclaude.engine.BackgroundAgentManager;
 import dev.openclaude.engine.EngineEvent;
 import dev.openclaude.engine.QueryEngine;
 import dev.openclaude.llm.LlmClient;
@@ -64,6 +65,8 @@ public class Main implements Callable<Integer> {
     @Option(names = {"--port"}, description = "Port for headless server (default: 9818).", defaultValue = "9818")
     private int port;
 
+    private BackgroundAgentManager backgroundManager;
+
     @Override
     public Integer call() {
         AppConfig config = AppConfig.load();
@@ -79,7 +82,7 @@ public class Main implements Callable<Integer> {
             ToolRegistry tools = createToolRegistry(client, config);
 
             GrpcAgentServer server = new GrpcAgentServer(
-                    client, tools, config.model(), systemPrompt, config.maxTokens(), port);
+                    client, tools, config.model(), systemPrompt, config.maxTokens(), port, backgroundManager);
             try {
                 server.start();
             } catch (Exception e) {
@@ -99,8 +102,9 @@ public class Main implements Callable<Integer> {
             CommandRegistry commands = new CommandRegistryFactory().create();
             PermissionManager permissions = new PermissionManager();
 
-            Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions);
+            Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions, backgroundManager);
             repl.start();
+            backgroundManager.shutdown();
             return 0;
         }
 
@@ -124,10 +128,11 @@ public class Main implements Callable<Integer> {
 
         QueryEngine engine = new QueryEngine(
                 client, tools, config.model(), systemPrompt,
-                config.maxTokens(), cwd, this::handlePrintEvent
+                config.maxTokens(), cwd, this::handlePrintEvent, backgroundManager
         );
 
         engine.run(prompt);
+        backgroundManager.shutdown();
 
         return 0;
     }
@@ -160,6 +165,9 @@ public class Main implements Callable<Integer> {
                     done.totalUsage().inputTokens(),
                     done.totalUsage().outputTokens(),
                     done.loopCount());
+        } else if (event instanceof EngineEvent.BackgroundAgentDone bg) {
+            System.out.println();
+            System.out.println(Ansi.DIM + "  [Background agent completed: " + bg.description() + "]" + Ansi.RESET);
         } else if (event instanceof EngineEvent.Error err) {
             System.err.println(Ansi.RED + "Error: " + err.message() + Ansi.RESET);
         }
@@ -177,7 +185,9 @@ public class Main implements Callable<Integer> {
         registry.register(new WebSearchTool());
 
         // AgentTool (sub-agents)
-        SubAgentRunner agentRunner = new SubAgentRunner(client, registry, config.model(), config.maxTokens());
+        backgroundManager = new BackgroundAgentManager();
+        SubAgentRunner agentRunner = new SubAgentRunner(
+                client, registry, config.model(), config.maxTokens(), backgroundManager);
         registry.register(new AgentTool(agentRunner));
 
         // Load plugins

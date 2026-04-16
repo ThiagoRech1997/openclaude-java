@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.*;
+import java.util.function.Predicate;
 
 /**
  * Registry of all available tools. Provides lookup and schema generation.
@@ -52,5 +53,18 @@ public final class ToolRegistry {
 
     public List<Tool> allTools() {
         return Collections.unmodifiableList(tools);
+    }
+
+    /**
+     * Create a new registry containing only tools that match the filter.
+     */
+    public ToolRegistry filteredCopy(Predicate<Tool> filter) {
+        ToolRegistry copy = new ToolRegistry();
+        for (Tool tool : this.tools) {
+            if (filter.test(tool)) {
+                copy.register(tool);
+            }
+        }
+        return copy;
     }
 }

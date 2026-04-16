@@ -21,6 +21,9 @@ public sealed interface EngineEvent {
     /** The agent loop completed successfully. */
     record Done(Usage totalUsage, int loopCount) implements EngineEvent {}
 
+    /** A background sub-agent completed. */
+    record BackgroundAgentDone(String description, String result) implements EngineEvent {}
+
     /** An error occurred. */
     record Error(String message) implements EngineEvent {}
 }

@@ -8,14 +8,23 @@ import dev.openclaude.tools.*;
  * The sub-agent runs its own QueryEngine loop with an isolated context,
  * executes tools, and returns a summary result.
  *
- * This is a "meta-tool" — it doesn't do work directly, but delegates
- * to a new agent instance with its own conversation thread.
+ * Supports typed sub-agents (Explore, Plan), model override, and background execution.
  */
 public class AgentTool implements Tool {
 
     private static final JsonNode SCHEMA = SchemaBuilder.object()
             .stringProp("prompt", "The task for the agent to perform.", true)
             .stringProp("description", "Short (3-5 word) description of the task.", true)
+            .enumProp("subagent_type",
+                    "The type of sub-agent to launch. Explore is optimized for search and reading (read-only tools). "
+                            + "Plan is optimized for designing implementation plans (no file editing).",
+                    false, "general-purpose", "Explore", "Plan")
+            .enumProp("model",
+                    "Optional model override. Allows the sub-agent to use a different model than the parent.",
+                    false, "sonnet", "opus", "haiku")
+            .boolProp("run_in_background",
+                    "Run the sub-agent in a background thread. Returns immediately and notifies when complete.",
+                    false)
             .build();
 
     private final AgentRunner runner;
@@ -48,8 +57,14 @@ public class AgentTool implements Tool {
             return ToolResult.error("prompt is required.");
         }
 
+        String subagentType = input.has("subagent_type") ? input.get("subagent_type").asText() : null;
+        String model = input.has("model") ? input.get("model").asText() : null;
+        boolean runInBackground = input.path("run_in_background").asBoolean(false);
+
+        AgentRunRequest request = new AgentRunRequest(prompt, description, subagentType, model, runInBackground);
+
         try {
-            String result = runner.runAgent(prompt, context);
+            String result = runner.runAgent(request, context);
             return ToolResult.success(result);
         } catch (Exception e) {
             return ToolResult.error("Agent failed: " + e.getMessage());
