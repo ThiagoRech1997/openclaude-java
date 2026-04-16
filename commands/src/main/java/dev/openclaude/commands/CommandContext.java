@@ -16,5 +16,6 @@ public record CommandContext(
         PermissionManager permissions,
         SessionManager session,
         Path workingDirectory,
-        int terminalWidth
+        int terminalWidth,
+        CommandRegistry commandRegistry
 ) {}

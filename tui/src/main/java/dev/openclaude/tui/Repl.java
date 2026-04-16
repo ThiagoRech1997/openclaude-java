@@ -53,7 +53,7 @@ public class Repl {
 
             CommandContext cmdCtx = new CommandContext(
                     config, toolRegistry, permissions, session,
-                    workingDirectory, screen.getWidth());
+                    workingDirectory, screen.getWidth(), commandRegistry);
 
             while (true) {
                 String userInput = input.readLineSafe();

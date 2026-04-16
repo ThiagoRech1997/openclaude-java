@@ -11,19 +11,22 @@ public class HelpCommand implements Command {
     public CommandResult execute(String args, CommandContext ctx) {
         StringBuilder sb = new StringBuilder();
         sb.append("\n  Available commands:\n");
-        sb.append("    /help         Show this help\n");
-        sb.append("    /clear        Clear the screen\n");
-        sb.append("    /model        Show current model and provider\n");
-        sb.append("    /tools        List available tools\n");
-        sb.append("    /cost         Show token usage and estimated cost\n");
-        sb.append("    /permissions  Show/change permission mode\n");
-        sb.append("    /status       Show session status\n");
-        sb.append("    /diff         Show git diff of uncommitted changes\n");
-        sb.append("    /export       Export conversation to markdown\n");
-        sb.append("    /doctor       Check environment and configuration\n");
-        sb.append("    /compact      Summarize conversation to save context\n");
-        sb.append("    /reset        Reset the conversation\n");
-        sb.append("    /exit         Exit the REPL\n");
+
+        if (ctx.commandRegistry() != null) {
+            for (Command cmd : ctx.commandRegistry().allCommands()) {
+                String aliases = "";
+                if (cmd.aliases().length > 0) {
+                    aliases = " (" + String.join(", ", cmd.aliases()) + ")";
+                }
+                sb.append(String.format("    /%-13s%s  %s%n",
+                        cmd.name(), aliases, cmd.description()));
+            }
+        } else {
+            sb.append("    /help         Show this help\n");
+            sb.append("    /clear        Clear the screen\n");
+            sb.append("    /exit         Exit the REPL\n");
+        }
+
         return CommandResult.text(sb.toString());
     }
 }

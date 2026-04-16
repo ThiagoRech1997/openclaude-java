@@ -37,7 +37,7 @@ OpenClaude Java is a multi-provider coding agent CLI written in Java 17 — a re
 
 ## Architecture
 
-**11-module Gradle project** (`build.gradle.kts` with Kotlin DSL). All modules live under the root and follow `src/main/java/dev/openclaude/<module>/` layout.
+**10-module Gradle project** (`build.gradle.kts` with Kotlin DSL). All modules live under the root and follow `src/main/java/dev/openclaude/<module>/` layout.
 
 ### Module Dependency Graph
 
@@ -63,12 +63,30 @@ cli → tui → engine → tools → core
 - **tui** — Terminal UI with JLine 3. `Repl` is the main loop, `AgentDisplay` renders streaming output, `TextInput` handles readline-like input, `MarkdownRenderer` formats markdown.
 - **cli** — `Main.java` is the PicoCLI entry point that wires everything together and selects mode (REPL, print, or headless).
 
+### Sealed Data Model Hierarchy
+
+These sealed interfaces are the backbone of the type system — understand them before modifying engine or LLM code:
+
+- **Message** → `UserMessage`, `AssistantMessage`
+- **ContentBlock** → `Text`, `Thinking`, `ToolUse`, `ToolResult`
+- **StreamEvent** → `MessageStart`, `TextDelta`, `ThinkingDelta`, `ToolUseStart`, `ToolInputDelta`, `ContentBlockStop`, `MessageComplete`, `MessageDelta`, `Error`
+
+### Provider Routing (`LlmClientFactory`)
+
+`AppConfig` determines the provider string, then `LlmClientFactory` selects the client:
+- `"anthropic"` → `AnthropicClient` (SSE streaming, Messages API)
+- `"openai"`, `"azure"`, `"deepseek"`, `"groq"`, `"mistral"`, `"together"`, `"local"`, `"openrouter"`, `"github"` → `OpenAIClient` (Chat Completions API)
+- `"ollama"` → `OllamaClient` (JSONL streaming, `/api/chat`)
+- Fallback: if base URL contains `anthropic.com` → Anthropic, otherwise OpenAI-compatible
+
 ### Key Patterns
 
-- **Sealed interfaces + records** for all data models (Message, ContentBlock, StreamEvent) — exhaustive pattern matching, no class hierarchies.
+- **Sealed interfaces + records** for all data models — exhaustive pattern matching, no class hierarchies.
 - **Jackson 2.18** for all JSON (de)serialization. `JsonNode` is used extensively for tool schemas and LLM API payloads.
-- **Provider selection** is env-var driven in `AppConfig`: set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_BASE_URL`, etc. Default is Anthropic with Claude Sonnet 4.
-- **Configuration env vars**: `OPENCLAUDE_MAX_TOKENS` (default 16384), `OPENCLAUDE_MODEL`, provider-specific API keys.
+- **No external HTTP library** — all LLM clients use `java.net.http.HttpClient` directly.
+- **No linting/static analysis** configured — no Checkstyle, SpotBugs, or similar plugins.
+- **No CI/CD** — no GitHub Actions or other pipeline config exists yet.
+- **Configuration env vars**: `OPENCLAUDE_MAX_TOKENS` (default 16384), `OPENCLAUDE_MODEL`, provider-specific API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
 - **User data directories**: `~/.claude/sessions/` (session JSON), `~/.claude/plugins/` (plugin JARs).
 
 ## Testing
