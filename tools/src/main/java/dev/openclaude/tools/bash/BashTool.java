@@ -21,7 +21,9 @@ public class BashTool implements Tool {
     private static final JsonNode SCHEMA = SchemaBuilder.object()
             .stringProp("command", "The bash command to execute.", true)
             .intProp("timeout", "Optional timeout in milliseconds (max 600000).", false)
-            .stringProp("description", "Clear description of what this command does.", false)
+            .stringProp("description", "Clear description of what this command does.", true)
+            .boolProp("dangerouslyDisableSandbox",
+                    "Set to true to bypass security sandbox. Only use when explicitly requested.", false)
             .build();
 
     @Override
@@ -49,6 +51,15 @@ public class BashTool implements Tool {
         String command = input.path("command").asText("");
         if (command.isBlank()) {
             return ToolResult.error("Command is required.");
+        }
+
+        boolean disableSandbox = input.path("dangerouslyDisableSandbox").asBoolean(false);
+        if (!disableSandbox) {
+            BashSandbox.SandboxResult result = BashSandbox.validate(command);
+            if (result instanceof BashSandbox.SandboxResult.Blocked blocked) {
+                return ToolResult.error("Command blocked by sandbox: " + blocked.reason()
+                        + ". Use dangerouslyDisableSandbox to bypass.");
+            }
         }
 
         long timeout = input.has("timeout")
