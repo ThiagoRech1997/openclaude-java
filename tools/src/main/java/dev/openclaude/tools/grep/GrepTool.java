@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class GrepTool implements Tool {
 
-    private static final int MAX_RESULTS = 250;
+    private static final int DEFAULT_HEAD_LIMIT = 250;
 
     private static final JsonNode SCHEMA = SchemaBuilder.object()
             .stringProp("pattern", "Regular expression pattern to search for.", true)
@@ -25,7 +25,14 @@ public class GrepTool implements Tool {
             .enumProp("output_mode", "Output mode: 'content', 'files_with_matches', or 'count'.",
                     false, "content", "files_with_matches", "count")
             .boolProp("-i", "Case insensitive search.", false)
-            .intProp("head_limit", "Limit output to first N results. Default 250.", false)
+            .boolProp("-n", "Show line numbers in output. Default true. Only applies to content mode.", false)
+            .boolProp("multiline", "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall).", false)
+            .intProp("-A", "Number of lines to show after each match. Only applies to content mode.", false)
+            .intProp("-B", "Number of lines to show before each match. Only applies to content mode.", false)
+            .intProp("-C", "Number of lines of context before and after each match. Only applies to content mode.", false)
+            .intProp("offset", "Skip first N lines/entries before applying head_limit. Default 0.", false)
+            .intProp("head_limit", "Limit output to first N results. Default 250. Pass 0 for unlimited.", false)
+            .stringProp("type", "File type to search (rg --type). Common types: java, js, py, rust, go, etc.", false)
             .build();
 
     @Override
@@ -60,7 +67,23 @@ public class GrepTool implements Tool {
         String glob = input.path("glob").asText("");
         String outputMode = input.path("output_mode").asText("files_with_matches");
         boolean caseInsensitive = input.path("-i").asBoolean(false);
-        int headLimit = input.has("head_limit") ? input.get("head_limit").asInt(MAX_RESULTS) : MAX_RESULTS;
+        boolean showLineNumbers = input.path("-n").asBoolean(true);
+        boolean multiline = input.path("multiline").asBoolean(false);
+        int afterContext = input.has("-A") ? input.get("-A").asInt(0) : 0;
+        int beforeContext = input.has("-B") ? input.get("-B").asInt(0) : 0;
+        int contextLines = input.has("-C") ? input.get("-C").asInt(0) : 0;
+        int offset = input.has("offset") ? input.get("offset").asInt(0) : 0;
+        String typeFilter = input.path("type").asText("");
+
+        int headLimit;
+        if (input.has("head_limit")) {
+            int raw = input.get("head_limit").asInt(DEFAULT_HEAD_LIMIT);
+            headLimit = (raw <= 0) ? Integer.MAX_VALUE : raw;
+        } else {
+            headLimit = DEFAULT_HEAD_LIMIT;
+        }
+
+        boolean isContentMode = "content".equals(outputMode);
 
         List<String> cmd = new ArrayList<>();
 
@@ -69,32 +92,48 @@ public class GrepTool implements Tool {
             cmd.add("rg");
             cmd.add("--no-heading");
             if (caseInsensitive) cmd.add("-i");
+            if (multiline) {
+                cmd.add("-U");
+                cmd.add("--multiline-dotall");
+            }
             if (!glob.isBlank()) {
                 cmd.add("--glob");
                 cmd.add(glob);
             }
+            if (!typeFilter.isBlank()) {
+                cmd.add("--type");
+                cmd.add(typeFilter);
+            }
             switch (outputMode) {
-                case "files_with_matches" -> {
-                    cmd.add("-l");
-                }
-                case "count" -> {
-                    cmd.add("-c");
-                }
+                case "files_with_matches" -> cmd.add("-l");
+                case "count" -> cmd.add("-c");
                 default -> {
-                    cmd.add("-n"); // line numbers for content mode
+                    if (showLineNumbers) cmd.add("-n");
+                    if (afterContext > 0) { cmd.add("-A"); cmd.add(String.valueOf(afterContext)); }
+                    if (beforeContext > 0) { cmd.add("-B"); cmd.add(String.valueOf(beforeContext)); }
+                    if (contextLines > 0) { cmd.add("-C"); cmd.add(String.valueOf(contextLines)); }
                 }
             }
-            cmd.add("--max-count");
-            cmd.add(String.valueOf(headLimit * 2)); // rg max-count is per-file
+            if (headLimit != Integer.MAX_VALUE) {
+                cmd.add("--max-count");
+                cmd.add(String.valueOf(headLimit * 2)); // rg max-count is per-file
+            }
             cmd.add(pattern);
             cmd.add(searchPath.toString());
         } else {
             cmd.add("grep");
             cmd.add("-r");
-            cmd.add("-n");
             if (caseInsensitive) cmd.add("-i");
             if ("files_with_matches".equals(outputMode)) cmd.add("-l");
             if ("count".equals(outputMode)) cmd.add("-c");
+            if (isContentMode) {
+                if (showLineNumbers) cmd.add("-n");
+                if (afterContext > 0) { cmd.add("-A"); cmd.add(String.valueOf(afterContext)); }
+                if (beforeContext > 0) { cmd.add("-B"); cmd.add(String.valueOf(beforeContext)); }
+                if (contextLines > 0) { cmd.add("-C"); cmd.add(String.valueOf(contextLines)); }
+            } else {
+                cmd.add("-n");
+            }
             if (!glob.isBlank()) {
                 cmd.add("--include");
                 cmd.add(glob);
@@ -112,11 +151,17 @@ public class GrepTool implements Tool {
 
             StringBuilder output = new StringBuilder();
             int lineCount = 0;
+            int skipped = 0;
 
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = reader.readLine()) != null && lineCount < headLimit) {
+                while ((line = reader.readLine()) != null) {
+                    if (skipped < offset) {
+                        skipped++;
+                        continue;
+                    }
+                    if (lineCount >= headLimit) break;
                     output.append(line).append('\n');
                     lineCount++;
                 }
@@ -128,7 +173,7 @@ public class GrepTool implements Tool {
                 return ToolResult.success("No matches found");
             }
 
-            if (lineCount >= headLimit) {
+            if (lineCount >= headLimit && headLimit != Integer.MAX_VALUE) {
                 output.append("\n(results limited to ").append(headLimit).append(" entries)\n");
             }
 
