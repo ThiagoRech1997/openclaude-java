@@ -80,12 +80,17 @@ public class FileReadTool implements Tool {
         }
 
         String ext = extensionOf(path);
-        return switch (ext) {
+        ToolResult result = switch (ext) {
             case "png", "jpg", "jpeg", "gif", "webp" -> readImage(path, ext);
             case "pdf" -> readPdf(path, input.path("pages").asText(""));
             case "ipynb" -> readNotebook(path);
             default -> readText(path, input);
         };
+
+        if (!result.isError()) {
+            context.readFiles().add(path.toAbsolutePath().normalize());
+        }
+        return result;
     }
 
     private ToolResult readText(Path path, JsonNode input) {

@@ -13,6 +13,8 @@ import dev.openclaude.tools.ToolUseContext;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
@@ -34,6 +36,7 @@ public class QueryEngine {
     private final Path workingDirectory;
     private final Consumer<EngineEvent> eventHandler;
     private final BackgroundAgentManager backgroundManager;
+    private final Set<Path> readFiles = ConcurrentHashMap.newKeySet();
 
     public QueryEngine(
             LlmClient client,
@@ -184,7 +187,7 @@ public class QueryEngine {
         }
 
         Tool tool = toolOpt.get();
-        ToolUseContext context = new ToolUseContext(workingDirectory);
+        ToolUseContext context = new ToolUseContext(workingDirectory, false, readFiles);
 
         try {
             return tool.execute(toolUse.input(), context);

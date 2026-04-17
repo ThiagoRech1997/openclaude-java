@@ -45,6 +45,13 @@ public class FileWriteTool implements Tool {
         if (!path.isAbsolute()) {
             path = context.workingDirectory().resolve(path);
         }
+        Path normalized = path.toAbsolutePath().normalize();
+
+        if (Files.exists(path) && !context.readFiles().contains(normalized)) {
+            return ToolResult.error(
+                    "File has not been read in this session. Use the Read tool first before "
+                            + "overwriting an existing file, to avoid unintended data loss: " + path);
+        }
 
         try {
             Path parent = path.getParent();
@@ -53,6 +60,7 @@ public class FileWriteTool implements Tool {
             }
 
             Files.writeString(path, content);
+            context.readFiles().add(normalized);
 
             long bytes = content.getBytes().length;
             return ToolResult.success("Successfully wrote " + bytes + " bytes to " + path);

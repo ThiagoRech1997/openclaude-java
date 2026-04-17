@@ -92,6 +92,7 @@ public class FileEditTool implements Tool {
             }
 
             Files.writeString(path, updated);
+            context.readFiles().add(path.toAbsolutePath().normalize());
 
             return ToolResult.success("Successfully replaced " + count + " occurrence(s) in " + path);
 
