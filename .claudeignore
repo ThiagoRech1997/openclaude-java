@@ -1,0 +1,11 @@
+build/
+*/build/
+.gradle/
+
+.env
+.env.*
+*.local.json
+
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
