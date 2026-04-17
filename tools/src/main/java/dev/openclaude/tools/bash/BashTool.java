@@ -126,7 +126,7 @@ public class BashTool implements Tool {
             String result = output.toString();
 
             if (exitCode != 0) {
-                return new ToolResult("Exit code " + exitCode + "\n" + result, true);
+                return ToolResult.error("Exit code " + exitCode + "\n" + result);
             }
 
             return ToolResult.success(result.isEmpty() ? "(no output)" : result);

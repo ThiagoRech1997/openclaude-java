@@ -55,9 +55,10 @@ public class ContextCompactor {
                 } else if (block instanceof ContentBlock.ToolUse tu) {
                     text.append("[Tool: ").append(tu.name()).append("]");
                 } else if (block instanceof ContentBlock.ToolResult tr) {
-                    String preview = tr.content().length() > 200
-                            ? tr.content().substring(0, 200) + "..."
-                            : tr.content();
+                    String trText = tr.textContent();
+                    String preview = trText.length() > 200
+                            ? trText.substring(0, 200) + "..."
+                            : trText;
                     text.append("[Result: ").append(preview).append("]");
                 }
             }

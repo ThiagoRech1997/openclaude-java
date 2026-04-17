@@ -83,7 +83,7 @@ public class AgentDisplay {
         if (tee.result().isError()) {
             screen.println(Ansi.RED + " ✗" + Ansi.RESET);
             // Show truncated error
-            String error = tee.result().content();
+            String error = tee.result().textContent();
             String[] lines = error.split("\n");
             int maxLines = Math.min(lines.length, 5);
             for (int i = 0; i < maxLines; i++) {
@@ -95,7 +95,7 @@ public class AgentDisplay {
         } else {
             screen.println(Ansi.GREEN + " ✓" + Ansi.RESET);
             // Show brief result preview
-            String content = tee.result().content();
+            String content = tee.result().textContent();
             if (content != null && !content.isBlank()) {
                 String[] lines = content.split("\n");
                 if (lines.length <= 3) {

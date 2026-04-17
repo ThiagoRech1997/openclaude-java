@@ -124,13 +124,37 @@ public class OpenAIClient implements LlmClient {
                     .anyMatch(b -> b instanceof ContentBlock.ToolResult);
 
             if (hasToolResults) {
-                // Tool results become individual "tool" role messages in OpenAI
+                // Tool results become individual "tool" role messages in OpenAI.
+                // OpenAI tool-role messages only accept text content — images must
+                // follow as a separate user-role message with image_url parts.
                 for (ContentBlock block : user.content()) {
                     if (block instanceof ContentBlock.ToolResult tr) {
+                        StringBuilder text = new StringBuilder();
+                        List<ContentBlock.Image> images = new ArrayList<>();
+                        for (ContentBlock inner : tr.content()) {
+                            if (inner instanceof ContentBlock.Text t) {
+                                text.append(t.text());
+                            } else if (inner instanceof ContentBlock.Image img) {
+                                images.add(img);
+                            }
+                        }
                         ObjectNode toolMsg = messagesArray.addObject();
                         toolMsg.put("role", "tool");
                         toolMsg.put("tool_call_id", tr.toolUseId());
-                        toolMsg.put("content", tr.content());
+                        toolMsg.put("content", text.length() > 0 ? text.toString() : "(see attached image)");
+
+                        if (!images.isEmpty()) {
+                            ObjectNode imgUserMsg = messagesArray.addObject();
+                            imgUserMsg.put("role", "user");
+                            ArrayNode parts = imgUserMsg.putArray("content");
+                            for (ContentBlock.Image img : images) {
+                                ObjectNode part = parts.addObject();
+                                part.put("type", "image_url");
+                                ObjectNode urlNode = part.putObject("image_url");
+                                urlNode.put("url", "data:" + img.source().mediaType()
+                                        + ";base64," + img.source().data());
+                            }
+                        }
                     } else if (block instanceof ContentBlock.Text t) {
                         ObjectNode userMsg = messagesArray.addObject();
                         userMsg.put("role", "user");

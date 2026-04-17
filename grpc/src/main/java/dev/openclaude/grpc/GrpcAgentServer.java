@@ -144,7 +144,7 @@ public class GrpcAgentServer {
                     ObjectNode obj = MAPPER.createObjectNode();
                     obj.put("type", "tool_result");
                     obj.put("tool_name", tee.toolName());
-                    obj.put("output", tee.result().content());
+                    obj.put("output", tee.result().textContent());
                     obj.put("is_error", tee.result().isError());
                     obj.put("tool_use_id", tee.toolUseId());
                     writer.println(MAPPER.writeValueAsString(obj));

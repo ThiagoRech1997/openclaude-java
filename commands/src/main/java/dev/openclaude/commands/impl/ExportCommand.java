@@ -55,7 +55,7 @@ public class ExportCommand implements Command {
                     md.append("**Result**");
                     if (tr.isError()) md.append(" (error)");
                     md.append(":\n\n```\n");
-                    String content = tr.content();
+                    String content = tr.textContent();
                     if (content.length() > 2000) {
                         md.append(content, 0, 2000).append("\n... (truncated)");
                     } else {

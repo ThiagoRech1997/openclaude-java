@@ -107,7 +107,14 @@ public class OllamaClient implements LlmClient {
                     text.append(t.text());
                 } else if (block instanceof ContentBlock.ToolResult tr) {
                     text.append("[Tool result for ").append(tr.toolUseId()).append("]: ");
-                    text.append(tr.content());
+                    for (ContentBlock inner : tr.content()) {
+                        if (inner instanceof ContentBlock.Text innerText) {
+                            text.append(innerText.text());
+                        } else if (inner instanceof ContentBlock.Image img) {
+                            text.append("[image: ").append(img.source().mediaType())
+                                    .append(", base64 omitted]");
+                        }
+                    }
                 }
             }
             msgNode.put("content", text.toString());

@@ -111,8 +111,27 @@ public class AnthropicClient implements LlmClient {
                 } else if (block instanceof ContentBlock.ToolResult tr) {
                     n.put("type", "tool_result");
                     n.put("tool_use_id", tr.toolUseId());
-                    n.put("content", tr.content());
+                    ArrayNode contentArr = n.putArray("content");
+                    for (ContentBlock inner : tr.content()) {
+                        ObjectNode c = contentArr.addObject();
+                        if (inner instanceof ContentBlock.Text t) {
+                            c.put("type", "text");
+                            c.put("text", t.text());
+                        } else if (inner instanceof ContentBlock.Image img) {
+                            c.put("type", "image");
+                            ObjectNode src = c.putObject("source");
+                            src.put("type", img.source().type());
+                            src.put("media_type", img.source().mediaType());
+                            src.put("data", img.source().data());
+                        }
+                    }
                     if (tr.isError()) n.put("is_error", true);
+                } else if (block instanceof ContentBlock.Image img) {
+                    n.put("type", "image");
+                    ObjectNode src = n.putObject("source");
+                    src.put("type", img.source().type());
+                    src.put("media_type", img.source().mediaType());
+                    src.put("data", img.source().data());
                 } else if (block instanceof ContentBlock.Thinking th) {
                     n.put("type", "thinking");
                     n.put("thinking", th.thinking());
