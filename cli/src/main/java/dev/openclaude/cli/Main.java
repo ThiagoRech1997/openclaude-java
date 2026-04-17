@@ -16,6 +16,7 @@ import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
 import dev.openclaude.tools.monitor.MonitorTool;
+import dev.openclaude.tools.kill.KillProcessTool;
 import dev.openclaude.tools.webfetch.WebFetchTool;
 import dev.openclaude.tools.websearch.WebSearchTool;
 import dev.openclaude.tools.agent.AgentTool;
@@ -83,6 +84,11 @@ public class Main implements Callable<Integer> {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
             ToolRegistry tools = createToolRegistry(client, config);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (processManager != null) processManager.shutdown();
+                if (backgroundManager != null) backgroundManager.shutdown();
+            }, "openclaude-shutdown"));
 
             GrpcAgentServer server = new GrpcAgentServer(
                     client, tools, config.model(), systemPrompt, config.maxTokens(), port, backgroundManager);
@@ -182,6 +188,7 @@ public class Main implements Callable<Integer> {
         processManager = new BackgroundProcessManager();
         registry.register(new BashTool(processManager));
         registry.register(new MonitorTool(processManager));
+        registry.register(new KillProcessTool(processManager));
         registry.register(new FileReadTool());
         registry.register(new FileWriteTool());
         registry.register(new FileEditTool());
