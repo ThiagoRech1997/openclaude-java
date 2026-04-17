@@ -8,12 +8,14 @@ import dev.openclaude.engine.QueryEngine;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.llm.provider.LlmClientFactory;
 import dev.openclaude.tools.ToolRegistry;
+import dev.openclaude.tools.background.BackgroundProcessManager;
 import dev.openclaude.tools.bash.BashTool;
 import dev.openclaude.tools.fileedit.FileEditTool;
 import dev.openclaude.tools.fileread.FileReadTool;
 import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
+import dev.openclaude.tools.monitor.MonitorTool;
 import dev.openclaude.tools.webfetch.WebFetchTool;
 import dev.openclaude.tools.websearch.WebSearchTool;
 import dev.openclaude.tools.agent.AgentTool;
@@ -66,6 +68,7 @@ public class Main implements Callable<Integer> {
     private int port;
 
     private BackgroundAgentManager backgroundManager;
+    private BackgroundProcessManager processManager;
 
     @Override
     public Integer call() {
@@ -105,6 +108,7 @@ public class Main implements Callable<Integer> {
             Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions, backgroundManager);
             repl.start();
             backgroundManager.shutdown();
+            processManager.shutdown();
             return 0;
         }
 
@@ -175,7 +179,9 @@ public class Main implements Callable<Integer> {
 
     private ToolRegistry createToolRegistry(LlmClient client, AppConfig config) {
         ToolRegistry registry = new ToolRegistry();
-        registry.register(new BashTool());
+        processManager = new BackgroundProcessManager();
+        registry.register(new BashTool(processManager));
+        registry.register(new MonitorTool(processManager));
         registry.register(new FileReadTool());
         registry.register(new FileWriteTool());
         registry.register(new FileEditTool());
