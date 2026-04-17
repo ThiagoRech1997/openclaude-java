@@ -17,6 +17,8 @@ import dev.openclaude.tools.glob.GlobTool;
 import dev.openclaude.tools.grep.GrepTool;
 import dev.openclaude.tools.monitor.MonitorTool;
 import dev.openclaude.tools.kill.KillProcessTool;
+import dev.openclaude.tools.todo.TodoStore;
+import dev.openclaude.tools.todo.TodoWriteTool;
 import dev.openclaude.tools.webfetch.WebFetchTool;
 import dev.openclaude.tools.websearch.WebSearchTool;
 import dev.openclaude.tools.agent.AgentTool;
@@ -196,6 +198,7 @@ public class Main implements Callable<Integer> {
         registry.register(new GrepTool());
         registry.register(new WebFetchTool());
         registry.register(new WebSearchTool());
+        registry.register(new TodoWriteTool(new TodoStore()));
 
         // AgentTool (sub-agents)
         backgroundManager = new BackgroundAgentManager();

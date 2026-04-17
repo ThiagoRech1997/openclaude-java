@@ -54,7 +54,7 @@ cli → tui → engine → tools → core
 
 - **core** — Sealed data models (`Message`, `ContentBlock`, `StreamEvent` as sealed interfaces with records), `AppConfig` (env-var driven), `PermissionManager`, `SessionManager`. This is the foundation everything depends on.
 - **llm** — `LlmClient` interface with three implementations routed by `LlmClientFactory`: `AnthropicClient` (SSE streaming), `OpenAIClient` (covers OpenAI/Azure/Deepseek/Groq/Mistral/Together/OpenRouter/GitHub Models), `OllamaClient` (JSONL streaming). All use Java 11+ HttpClient directly — no external HTTP library.
-- **tools** — `Tool` interface (`name()`, `description()`, `inputSchema()`, `execute()`), `ToolRegistry`, and `ToolUseContext` (passed to every `execute()` — tracks per-session state such as files read, used by `FileWriteTool`). Built-in tools are split by domain under `dev.openclaude.tools.<domain>`: `bash/`, `fileread/`, `filewrite/`, `fileedit/`, `glob/`, `grep/`, `webfetch/`, `websearch/`, `agent/`, `monitor/`, `kill/`, `background/` (shared `BackgroundProcessManager`). See **Built-in Tools** below for per-tool contracts.
+- **tools** — `Tool` interface (`name()`, `description()`, `inputSchema()`, `execute()`), `ToolRegistry`, and `ToolUseContext` (passed to every `execute()` — tracks per-session state such as files read, used by `FileWriteTool`). Built-in tools are split by domain under `dev.openclaude.tools.<domain>`: `bash/`, `fileread/`, `filewrite/`, `fileedit/`, `glob/`, `grep/`, `webfetch/`, `websearch/`, `agent/`, `monitor/`, `kill/`, `todo/` (session todo list), `background/` (shared `BackgroundProcessManager`). See **Built-in Tools** below for per-tool contracts.
 - **engine** — `QueryEngine` runs the agent loop (up to 50 iterations): send messages → stream LLM response → if tool calls, execute them and loop. Also contains `ContextCompactor` and `SubAgentRunner`.
 - **mcp** — MCP 2024-11-05 client. `McpClientManager` manages server connections (stdio transport), `McpToolBridge` wraps remote MCP tools as native `Tool` instances. Tool names are prefixed `mcp__<server>__<tool>`.
 - **commands** — REPL slash commands (`/help`, `/model`, `/clear`, `/cost`, `/tools`, `/diff`, `/doctor`, etc.) via `CommandRegistry`. Each command implements `Command` and returns `CommandResult` with an action (EXIT, CLEAR, RESET, CONTINUE).
@@ -78,6 +78,7 @@ Non-obvious contracts worth knowing before editing or adding tools:
 - **AgentTool** — launches a sub-agent via `SubAgentRunner`. Supports `subagent_type` (e.g. `general-purpose`, `Explore`, `Plan`), `model` override (`sonnet`/`opus`/`haiku`), and `run_in_background` (async, completion notification).
 - **MonitorTool** — observes background processes. `action="read"` drains new stdout lines for a `process_id` (optional regex filter); `action="list"` shows status of all tracked processes.
 - **KillProcessTool** — terminates a tracked background process (graceful then forcible).
+- **TodoWriteTool** — session-scoped todo list. Replace-all semantics: every call sends the full `todos` array (each item `{content, activeForm, status}`, status ∈ `pending`/`in_progress`/`completed`), which atomically replaces the state held in the shared `TodoStore` (`tools/todo/`). Validates at most one `in_progress` item; state is in-memory only (lost on restart).
 
 ### Background Process Model
 
