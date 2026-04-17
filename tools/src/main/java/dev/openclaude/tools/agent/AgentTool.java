@@ -8,7 +8,8 @@ import dev.openclaude.tools.*;
  * The sub-agent runs its own QueryEngine loop with an isolated context,
  * executes tools, and returns a summary result.
  *
- * Supports typed sub-agents (Explore, Plan), model override, and background execution.
+ * Supports typed sub-agents (Explore, Plan), model override, background execution,
+ * and optional worktree isolation.
  */
 public class AgentTool implements Tool {
 
@@ -25,6 +26,12 @@ public class AgentTool implements Tool {
             .boolProp("run_in_background",
                     "Run the sub-agent in a background thread. Returns immediately and notifies when complete.",
                     false)
+            .enumProp("isolation",
+                    "Isolation mode. With \"worktree\", the sub-agent runs in a temporary git worktree on its own "
+                            + "branch; the worktree is automatically cleaned up if the agent makes no changes, "
+                            + "otherwise the path and branch are returned in the result. The worktree starts from "
+                            + "HEAD, so uncommitted changes in the parent are not visible to the sub-agent.",
+                    false, "worktree")
             .build();
 
     private final AgentRunner runner;
@@ -61,7 +68,12 @@ public class AgentTool implements Tool {
         String model = input.has("model") ? input.get("model").asText() : null;
         boolean runInBackground = input.path("run_in_background").asBoolean(false);
 
-        AgentRunRequest request = new AgentRunRequest(prompt, description, subagentType, model, runInBackground);
+        String isolation = input.has("isolation") ? input.get("isolation").asText() : null;
+        if (isolation != null && !isolation.equals("worktree")) {
+            return ToolResult.error("isolation must be 'worktree' or omitted.");
+        }
+
+        AgentRunRequest request = new AgentRunRequest(prompt, description, subagentType, model, runInBackground, isolation);
 
         try {
             String result = runner.runAgent(request, context);

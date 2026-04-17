@@ -8,6 +8,8 @@ import dev.openclaude.tools.ToolUseContext;
 import dev.openclaude.tools.agent.AgentRunRequest;
 import dev.openclaude.tools.agent.AgentRunner;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -61,32 +63,56 @@ public class SubAgentRunner implements AgentRunner {
         String resolvedModel = ModelAlias.resolve(request.model(), this.model);
         ToolRegistry filteredTools = resolveToolRegistry(request.subagentType());
 
-        StringBuilder resultText = new StringBuilder();
+        Path workDir = parentContext.workingDirectory();
+        WorktreeSession session = null;
+        if ("worktree".equals(request.isolation())) {
+            try {
+                session = WorktreeSession.create(workDir);
+                workDir = session.path();
+            } catch (IOException e) {
+                return "Failed to create worktree: " + e.getMessage();
+            }
+        }
 
-        QueryEngine engine = new QueryEngine(
-                client, filteredTools, resolvedModel, systemPrompt,
-                maxTokens, parentContext.workingDirectory(),
-                event -> {
-                    if (event instanceof EngineEvent.Stream s) {
-                        if (s.event() instanceof StreamEvent.TextDelta td) {
-                            resultText.append(td.text());
+        StringBuilder resultText = new StringBuilder();
+        boolean runFailed = false;
+        try {
+            QueryEngine engine = new QueryEngine(
+                    client, filteredTools, resolvedModel, systemPrompt,
+                    maxTokens, workDir,
+                    event -> {
+                        if (event instanceof EngineEvent.Stream s) {
+                            if (s.event() instanceof StreamEvent.TextDelta td) {
+                                resultText.append(td.text());
+                            }
                         }
+                    }
+            );
+
+            List<Message> messages = engine.run(request.prompt());
+
+            // Extract the final assistant text
+            if (resultText.length() == 0) {
+                for (int i = messages.size() - 1; i >= 0; i--) {
+                    if (messages.get(i) instanceof Message.AssistantMessage am) {
+                        for (ContentBlock block : am.content()) {
+                            if (block instanceof ContentBlock.Text t) {
+                                resultText.append(t.text());
+                            }
+                        }
+                        break;
                     }
                 }
-        );
-
-        List<Message> messages = engine.run(request.prompt());
-
-        // Extract the final assistant text
-        if (resultText.length() == 0) {
-            for (int i = messages.size() - 1; i >= 0; i--) {
-                if (messages.get(i) instanceof Message.AssistantMessage am) {
-                    for (ContentBlock block : am.content()) {
-                        if (block instanceof ContentBlock.Text t) {
-                            resultText.append(t.text());
-                        }
-                    }
-                    break;
+            }
+        } catch (RuntimeException e) {
+            runFailed = true;
+            throw e;
+        } finally {
+            if (session != null) {
+                WorktreeSession.Result r = session.finishAndMaybeCleanup(runFailed);
+                if (r.kept()) {
+                    resultText.append("\n\n---\nWorktree: ").append(r.path())
+                            .append("\nBranch: ").append(r.branch()).append("\n");
                 }
             }
         }
