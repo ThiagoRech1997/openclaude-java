@@ -11,6 +11,7 @@ import dev.openclaude.tools.ToolRegistry;
 import dev.openclaude.tools.background.BackgroundProcessManager;
 import dev.openclaude.tools.bash.BashTool;
 import dev.openclaude.tools.fileedit.FileEditTool;
+import dev.openclaude.tools.notebook.NotebookEditTool;
 import dev.openclaude.tools.fileread.FileReadTool;
 import dev.openclaude.tools.filewrite.FileWriteTool;
 import dev.openclaude.tools.glob.GlobTool;
@@ -194,6 +195,7 @@ public class Main implements Callable<Integer> {
         registry.register(new FileReadTool());
         registry.register(new FileWriteTool());
         registry.register(new FileEditTool());
+        registry.register(new NotebookEditTool());
         registry.register(new GlobTool());
         registry.register(new GrepTool());
         registry.register(new WebFetchTool());
