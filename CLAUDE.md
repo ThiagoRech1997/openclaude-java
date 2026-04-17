@@ -54,7 +54,7 @@ cli → tui → engine → tools → core
 
 - **core** — Sealed data models (`Message`, `ContentBlock`, `StreamEvent` as sealed interfaces with records), `AppConfig` (env-var driven), `PermissionManager`, `SessionManager`. This is the foundation everything depends on.
 - **llm** — `LlmClient` interface with three implementations routed by `LlmClientFactory`: `AnthropicClient` (SSE streaming), `OpenAIClient` (covers OpenAI/Azure/Deepseek/Groq/Mistral/Together/OpenRouter/GitHub Models), `OllamaClient` (JSONL streaming). All use Java 11+ HttpClient directly — no external HTTP library.
-- **tools** — `Tool` interface (`name()`, `description()`, `inputSchema()`, `execute()`) and `ToolRegistry`. Built-in tools: `BashTool`, `FileReadTool`, `FileWriteTool`, `FileEditTool`, `GlobTool`, `GrepTool`.
+- **tools** — `Tool` interface (`name()`, `description()`, `inputSchema()`, `execute()`), `ToolRegistry`, and `ToolUseContext` (passed to every `execute()` — tracks per-session state such as files read, used by `FileWriteTool`). Built-in tools are split by domain under `dev.openclaude.tools.<domain>`: `bash/`, `fileread/`, `filewrite/`, `fileedit/`, `glob/`, `grep/`, `webfetch/`, `websearch/`, `agent/`, `monitor/`, `kill/`, `background/` (shared `BackgroundProcessManager`). See **Built-in Tools** below for per-tool contracts.
 - **engine** — `QueryEngine` runs the agent loop (up to 50 iterations): send messages → stream LLM response → if tool calls, execute them and loop. Also contains `ContextCompactor` and `SubAgentRunner`.
 - **mcp** — MCP 2024-11-05 client. `McpClientManager` manages server connections (stdio transport), `McpToolBridge` wraps remote MCP tools as native `Tool` instances. Tool names are prefixed `mcp__<server>__<tool>`.
 - **commands** — REPL slash commands (`/help`, `/model`, `/clear`, `/cost`, `/tools`, `/diff`, `/doctor`, etc.) via `CommandRegistry`. Each command implements `Command` and returns `CommandResult` with an action (EXIT, CLEAR, RESET, CONTINUE).
@@ -62,6 +62,26 @@ cli → tui → engine → tools → core
 - **grpc** — `GrpcAgentServer`: headless JSON-over-TCP server (default port 9818).
 - **tui** — Terminal UI with JLine 3. `Repl` is the main loop, `AgentDisplay` renders streaming output, `TextInput` handles readline-like input, `MarkdownRenderer` formats markdown.
 - **cli** — `Main.java` is the PicoCLI entry point that wires everything together and selects mode (REPL, print, or headless).
+
+### Built-in Tools
+
+Non-obvious contracts worth knowing before editing or adding tools:
+
+- **BashTool** — executes shell commands. A **sandbox** validates the command before running and rejects destructive patterns (e.g. `rm -rf /`, fork bombs, `dd` to block devices, shutdown). The sandbox is a guardrail, **not** a security boundary: callers may pass `dangerouslyDisableSandbox` to bypass. Supports `run_in_background` — returns a `process_id` instead of blocking, with stdout captured by `BackgroundProcessManager`.
+- **FileReadTool** — multimodal: text (with line numbers, `offset`/`limit`), images (PNG/JPG/GIF/WebP returned as base64 `Image` blocks), PDFs (text extraction, max 20 pages via `pages` param), and Jupyter notebooks (`.ipynb` cells + outputs + inline images). Returns `ContentBlock`s, not raw strings.
+- **FileWriteTool** — **safety contract**: an existing file cannot be overwritten unless it has been read in the current session (tracked via `ToolUseContext.readFiles()`). New files are always allowed. Prefer `FileEditTool` for modifying existing files.
+- **FileEditTool** — exact string replacement in a file; fails if `old_string` is not unique unless `replace_all` is set.
+- **GlobTool** — glob-pattern file search; results sorted by mtime.
+- **GrepTool** — ripgrep-backed search. Three output modes (`content`, `files_with_matches`, `count`) and params: `-i`, `-n`, `-A`/`-B`/`-C`, `multiline`, `offset`, `type`, `head_limit` (default 250).
+- **WebFetchTool** — fetches a URL, converts HTML → markdown. Auto-upgrades to HTTPS, truncates at 80KB, caches responses for 5 minutes.
+- **WebSearchTool** — Brave Search API. Requires `BRAVE_SEARCH_API_KEY` env var; auto-disabled if absent. Returns title/URL/snippet, cached 5 minutes.
+- **AgentTool** — launches a sub-agent via `SubAgentRunner`. Supports `subagent_type` (e.g. `general-purpose`, `Explore`, `Plan`), `model` override (`sonnet`/`opus`/`haiku`), and `run_in_background` (async, completion notification).
+- **MonitorTool** — observes background processes. `action="read"` drains new stdout lines for a `process_id` (optional regex filter); `action="list"` shows status of all tracked processes.
+- **KillProcessTool** — terminates a tracked background process (graceful then forcible).
+
+### Background Process Model
+
+`BackgroundProcessManager` (in `tools/background/`) is shared infrastructure used by `BashTool` (`run_in_background`), `MonitorTool`, and `KillProcessTool`. Each process gets a `process_id`; stdout is captured line-by-line into a 10K-line bounded ring buffer by a daemon reader thread. If lines are dropped (buffer overflow), a wrap marker is emitted on the next drain. Exited processes are auto-cleaned on the second drain.
 
 ### Sealed Data Model Hierarchy
 
@@ -86,7 +106,7 @@ These sealed interfaces are the backbone of the type system — understand them 
 - **No external HTTP library** — all LLM clients use `java.net.http.HttpClient` directly.
 - **No linting/static analysis** configured — no Checkstyle, SpotBugs, or similar plugins.
 - **No CI/CD** — no GitHub Actions or other pipeline config exists yet.
-- **Configuration env vars**: `OPENCLAUDE_MAX_TOKENS` (default 16384), `OPENCLAUDE_MODEL`, provider-specific API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
+- **Configuration env vars**: `OPENCLAUDE_MAX_TOKENS` (default 16384), `OPENCLAUDE_MODEL`, provider-specific API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.), `BRAVE_SEARCH_API_KEY` (enables `WebSearchTool`).
 - **User data directories**: `~/.claude/sessions/` (session JSON), `~/.claude/plugins/` (plugin JARs).
 
 ## Testing
