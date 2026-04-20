@@ -23,6 +23,7 @@ public final class CommandRegistryFactory {
         registry.register(new ExportCommand());
         registry.register(new DoctorCommand());
         registry.register(new DocsCommand());
+        registry.register(new MemoryCommand());
         return registry;
     }
 }

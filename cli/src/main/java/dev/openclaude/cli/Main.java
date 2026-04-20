@@ -1,6 +1,7 @@
 package dev.openclaude.cli;
 
 import dev.openclaude.core.config.AppConfig;
+import dev.openclaude.core.config.ClaudeMdLoader;
 import dev.openclaude.core.hooks.HookConfig;
 import dev.openclaude.core.hooks.HookExecutor;
 import dev.openclaude.core.hooks.HooksConfigLoader;
@@ -75,6 +76,9 @@ public class Main implements Callable<Integer> {
     @Option(names = {"--port"}, description = "Port for headless server (default: 9818).", defaultValue = "9818")
     private int port;
 
+    @Option(names = {"--no-claude-md"}, description = "Disable auto-loading of CLAUDE.md files.")
+    private boolean disableClaudeMd;
+
     private BackgroundAgentManager backgroundManager;
     private BackgroundProcessManager processManager;
 
@@ -84,6 +88,15 @@ public class Main implements Callable<Integer> {
 
         if (model != null) {
             config = new AppConfig(config.apiKey(), model, config.baseUrl(), config.provider(), config.maxTokens());
+        }
+
+        Path cwd = Path.of(System.getProperty("user.dir"));
+        String effectiveSystemPrompt = systemPrompt;
+        if (!disableClaudeMd) {
+            ClaudeMdLoader.Result claudeMd = ClaudeMdLoader.load(cwd);
+            if (!claudeMd.isEmpty()) {
+                effectiveSystemPrompt = claudeMd.toSystemPromptPrefix() + "\n\n" + systemPrompt;
+            }
         }
 
         // Headless server mode
@@ -98,7 +111,7 @@ public class Main implements Callable<Integer> {
             }, "openclaude-shutdown"));
 
             GrpcAgentServer server = new GrpcAgentServer(
-                    client, tools, config.model(), systemPrompt, config.maxTokens(), port, backgroundManager);
+                    client, tools, config.model(), effectiveSystemPrompt, config.maxTokens(), port, backgroundManager);
             try {
                 server.start();
             } catch (Exception e) {
@@ -113,13 +126,12 @@ public class Main implements Callable<Integer> {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
             ToolRegistry tools = createToolRegistry(client, config);
-            Path cwd = Path.of(System.getProperty("user.dir"));
 
             CommandRegistry commands = new CommandRegistryFactory().create();
             PermissionManager permissions = new PermissionManager();
             HookExecutor hooks = buildHookExecutor(cwd);
 
-            Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions,
+            Repl repl = new Repl(config, client, tools, cwd, effectiveSystemPrompt, commands, permissions,
                     backgroundManager, hooks);
             repl.start();
             backgroundManager.shutdown();
@@ -139,7 +151,6 @@ public class Main implements Callable<Integer> {
 
         LlmClient client = LlmClientFactory.create(config);
         ToolRegistry tools = createToolRegistry(client, config);
-        Path cwd = Path.of(System.getProperty("user.dir"));
 
         System.out.println(Ansi.DIM + config.provider() + " / " + config.model()
                 + " | " + tools.size() + " tools" + Ansi.RESET);
@@ -148,7 +159,7 @@ public class Main implements Callable<Integer> {
         HookExecutor hooks = buildHookExecutor(cwd);
 
         QueryEngine engine = new QueryEngine(
-                client, tools, config.model(), systemPrompt,
+                client, tools, config.model(), effectiveSystemPrompt,
                 config.maxTokens(), cwd, this::handlePrintEvent, backgroundManager, hooks
         );
 
