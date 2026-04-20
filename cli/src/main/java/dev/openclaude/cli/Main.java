@@ -127,7 +127,7 @@ public class Main implements Callable<Integer> {
             LlmClient client = LlmClientFactory.create(config);
             ToolRegistry tools = createToolRegistry(client, config);
 
-            CommandRegistry commands = new CommandRegistryFactory().create();
+            CommandRegistry commands = new CommandRegistryFactory().create(cwd);
             PermissionManager permissions = new PermissionManager();
             HookExecutor hooks = buildHookExecutor(cwd);
 

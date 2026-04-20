@@ -15,7 +15,9 @@ public record CommandResult(
         /** Clear the screen. */
         CLEAR,
         /** Reset the conversation. */
-        RESET
+        RESET,
+        /** Feed `output` to the LLM as a user prompt (custom slash commands). */
+        SUBMIT_PROMPT
     }
 
     public static CommandResult text(String output) {
@@ -32,5 +34,9 @@ public record CommandResult(
 
     public static CommandResult reset(String output) {
         return new CommandResult(output, Action.RESET);
+    }
+
+    public static CommandResult submitPrompt(String prompt) {
+        return new CommandResult(prompt, Action.SUBMIT_PROMPT);
     }
 }

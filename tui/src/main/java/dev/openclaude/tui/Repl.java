@@ -88,52 +88,68 @@ public class Repl {
                 if (trimmed.startsWith("/")) {
                     CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
                     if (result != null) {
-                        handleCommandResult(result, screen);
+                        if (!handleCommandResult(result, screen, display)) break;
                         continue;
                     }
                 }
 
-                // Run the agent
-                screen.println();
-                session.incrementTurn();
-
-                String effectivePrompt = trimmed;
-                if (hooks != null && !hooks.isEmpty()) {
-                    HookDecision pre = hooks.runUserPromptSubmit(trimmed);
-                    if (pre instanceof HookDecision.Deny deny) {
-                        screen.println(Ansi.RED + "  [hook blocked prompt] " + deny.reason() + Ansi.RESET);
-                        screen.println();
-                        continue;
-                    }
-                    if (pre instanceof HookDecision.Stop stop) {
-                        screen.println(Ansi.RED + "  [hook stop] " + stop.stopReason() + Ansi.RESET);
-                        screen.println();
-                        break;
-                    }
-                    if (pre instanceof HookDecision.Allow a && a.additionalContext() != null) {
-                        effectivePrompt = trimmed + "\n\n[hook additionalContext]\n" + a.additionalContext();
-                    }
-                }
-
-                QueryEngine engine = new QueryEngine(
-                        client, toolRegistry, config.model(), systemPrompt,
-                        config.maxTokens(), workingDirectory, event -> {
-                    display.handleEvent(event);
-                    // Track usage
-                    if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
-                        session.addUsage(done.totalUsage());
-                    }
-                }, backgroundManager, hooks);
-
-                engine.run(effectivePrompt);
-                screen.println();
+                if (!runAgentTurn(trimmed, display, screen)) break;
             }
         } catch (IOException e) {
             System.err.println("Failed to initialize terminal: " + e.getMessage());
         }
     }
 
-    private void handleCommandResult(CommandResult result, TerminalScreen screen) {
+    /**
+     * Run one agent turn on {@code prompt}. Returns false if the hook pipeline asked the REPL to stop.
+     */
+    private boolean runAgentTurn(String prompt, AgentDisplay display,
+                                 TerminalScreen screen) {
+        screen.println();
+        session.incrementTurn();
+
+        String effectivePrompt = prompt;
+        if (hooks != null && !hooks.isEmpty()) {
+            HookDecision pre = hooks.runUserPromptSubmit(prompt);
+            if (pre instanceof HookDecision.Deny deny) {
+                screen.println(Ansi.RED + "  [hook blocked prompt] " + deny.reason() + Ansi.RESET);
+                screen.println();
+                return true;
+            }
+            if (pre instanceof HookDecision.Stop stop) {
+                screen.println(Ansi.RED + "  [hook stop] " + stop.stopReason() + Ansi.RESET);
+                screen.println();
+                return false;
+            }
+            if (pre instanceof HookDecision.Allow a && a.additionalContext() != null) {
+                effectivePrompt = prompt + "\n\n[hook additionalContext]\n" + a.additionalContext();
+            }
+        }
+
+        QueryEngine engine = new QueryEngine(
+                client, toolRegistry, config.model(), systemPrompt,
+                config.maxTokens(), workingDirectory, event -> {
+            display.handleEvent(event);
+            if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
+                session.addUsage(done.totalUsage());
+            }
+        }, backgroundManager, hooks);
+
+        engine.run(effectivePrompt);
+        screen.println();
+        return true;
+    }
+
+    /**
+     * Process a command result. Returns false if the REPL should exit its main loop
+     * (only the Stop-hook path does so today — EXIT still calls System.exit).
+     */
+    private boolean handleCommandResult(CommandResult result, TerminalScreen screen,
+                                        AgentDisplay display) {
+        if (result.action() == CommandResult.Action.SUBMIT_PROMPT) {
+            return runAgentTurn(result.output(), display, screen);
+        }
+
         if (result.output() != null) {
             screen.println(result.output());
         }
@@ -145,17 +161,12 @@ public class Repl {
                 screen.println();
                 System.exit(0);
             }
-            case CLEAR -> {
-                screen.print(Ansi.CLEAR_SCREEN + Ansi.HOME);
-            }
-            case RESET -> {
-                // Session already cleared by the command
-                screen.println();
-            }
-            case CONTINUE -> {
-                screen.println();
-            }
+            case CLEAR -> screen.print(Ansi.CLEAR_SCREEN + Ansi.HOME);
+            case RESET -> screen.println();
+            case CONTINUE -> screen.println();
+            case SUBMIT_PROMPT -> { /* handled above */ }
         }
+        return true;
     }
 
     private String promptString() {
