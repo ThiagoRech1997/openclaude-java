@@ -1,6 +1,9 @@
 package dev.openclaude.cli;
 
 import dev.openclaude.core.config.AppConfig;
+import dev.openclaude.core.hooks.HookConfig;
+import dev.openclaude.core.hooks.HookExecutor;
+import dev.openclaude.core.hooks.HooksConfigLoader;
 import dev.openclaude.core.model.*;
 import dev.openclaude.engine.BackgroundAgentManager;
 import dev.openclaude.engine.EngineEvent;
@@ -42,6 +45,7 @@ import picocli.CommandLine.Option;
 
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 
 @Command(
@@ -113,8 +117,10 @@ public class Main implements Callable<Integer> {
 
             CommandRegistry commands = new CommandRegistryFactory().create();
             PermissionManager permissions = new PermissionManager();
+            HookExecutor hooks = buildHookExecutor(cwd);
 
-            Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions, backgroundManager);
+            Repl repl = new Repl(config, client, tools, cwd, systemPrompt, commands, permissions,
+                    backgroundManager, hooks);
             repl.start();
             backgroundManager.shutdown();
             processManager.shutdown();
@@ -139,9 +145,11 @@ public class Main implements Callable<Integer> {
                 + " | " + tools.size() + " tools" + Ansi.RESET);
         System.out.println();
 
+        HookExecutor hooks = buildHookExecutor(cwd);
+
         QueryEngine engine = new QueryEngine(
                 client, tools, config.model(), systemPrompt,
-                config.maxTokens(), cwd, this::handlePrintEvent, backgroundManager
+                config.maxTokens(), cwd, this::handlePrintEvent, backgroundManager, hooks
         );
 
         engine.run(prompt);
@@ -184,6 +192,11 @@ public class Main implements Callable<Integer> {
         } else if (event instanceof EngineEvent.Error err) {
             System.err.println(Ansi.RED + "Error: " + err.message() + Ansi.RESET);
         }
+    }
+
+    private HookExecutor buildHookExecutor(Path cwd) {
+        HookConfig hookConfig = HooksConfigLoader.load(cwd);
+        return new HookExecutor(hookConfig, UUID.randomUUID().toString(), cwd);
     }
 
     private ToolRegistry createToolRegistry(LlmClient client, AppConfig config) {

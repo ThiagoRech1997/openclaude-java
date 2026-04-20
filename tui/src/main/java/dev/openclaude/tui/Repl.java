@@ -2,6 +2,8 @@ package dev.openclaude.tui;
 
 import dev.openclaude.commands.*;
 import dev.openclaude.core.config.AppConfig;
+import dev.openclaude.core.hooks.HookDecision;
+import dev.openclaude.core.hooks.HookExecutor;
 import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.core.session.SessionManager;
 import dev.openclaude.engine.BackgroundAgentManager;
@@ -29,11 +31,20 @@ public class Repl {
     private final PermissionManager permissions;
     private final SessionManager session;
     private final BackgroundAgentManager backgroundManager;
+    private final HookExecutor hooks;
 
     public Repl(AppConfig config, LlmClient client, ToolRegistry toolRegistry,
                 Path workingDirectory, String systemPrompt,
                 CommandRegistry commandRegistry, PermissionManager permissions,
                 BackgroundAgentManager backgroundManager) {
+        this(config, client, toolRegistry, workingDirectory, systemPrompt,
+                commandRegistry, permissions, backgroundManager, null);
+    }
+
+    public Repl(AppConfig config, LlmClient client, ToolRegistry toolRegistry,
+                Path workingDirectory, String systemPrompt,
+                CommandRegistry commandRegistry, PermissionManager permissions,
+                BackgroundAgentManager backgroundManager, HookExecutor hooks) {
         this.config = config;
         this.client = client;
         this.toolRegistry = toolRegistry;
@@ -43,6 +54,7 @@ public class Repl {
         this.permissions = permissions;
         this.session = new SessionManager();
         this.backgroundManager = backgroundManager;
+        this.hooks = hooks;
     }
 
     /**
@@ -85,6 +97,24 @@ public class Repl {
                 screen.println();
                 session.incrementTurn();
 
+                String effectivePrompt = trimmed;
+                if (hooks != null && !hooks.isEmpty()) {
+                    HookDecision pre = hooks.runUserPromptSubmit(trimmed);
+                    if (pre instanceof HookDecision.Deny deny) {
+                        screen.println(Ansi.RED + "  [hook blocked prompt] " + deny.reason() + Ansi.RESET);
+                        screen.println();
+                        continue;
+                    }
+                    if (pre instanceof HookDecision.Stop stop) {
+                        screen.println(Ansi.RED + "  [hook stop] " + stop.stopReason() + Ansi.RESET);
+                        screen.println();
+                        break;
+                    }
+                    if (pre instanceof HookDecision.Allow a && a.additionalContext() != null) {
+                        effectivePrompt = trimmed + "\n\n[hook additionalContext]\n" + a.additionalContext();
+                    }
+                }
+
                 QueryEngine engine = new QueryEngine(
                         client, toolRegistry, config.model(), systemPrompt,
                         config.maxTokens(), workingDirectory, event -> {
@@ -93,9 +123,9 @@ public class Repl {
                     if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
                         session.addUsage(done.totalUsage());
                     }
-                }, backgroundManager);
+                }, backgroundManager, hooks);
 
-                engine.run(trimmed);
+                engine.run(effectivePrompt);
                 screen.println();
             }
         } catch (IOException e) {

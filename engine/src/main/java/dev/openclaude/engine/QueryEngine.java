@@ -2,6 +2,8 @@ package dev.openclaude.engine;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.openclaude.core.hooks.HookDecision;
+import dev.openclaude.core.hooks.HookExecutor;
 import dev.openclaude.core.model.*;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.llm.LlmRequest;
@@ -36,6 +38,7 @@ public class QueryEngine {
     private final Path workingDirectory;
     private final Consumer<EngineEvent> eventHandler;
     private final BackgroundAgentManager backgroundManager;
+    private final HookExecutor hooks;
     private final Set<Path> readFiles = ConcurrentHashMap.newKeySet();
 
     public QueryEngine(
@@ -47,7 +50,7 @@ public class QueryEngine {
             Path workingDirectory,
             Consumer<EngineEvent> eventHandler
     ) {
-        this(client, toolRegistry, model, systemPrompt, maxTokens, workingDirectory, eventHandler, null);
+        this(client, toolRegistry, model, systemPrompt, maxTokens, workingDirectory, eventHandler, null, null);
     }
 
     public QueryEngine(
@@ -60,6 +63,21 @@ public class QueryEngine {
             Consumer<EngineEvent> eventHandler,
             BackgroundAgentManager backgroundManager
     ) {
+        this(client, toolRegistry, model, systemPrompt, maxTokens, workingDirectory,
+                eventHandler, backgroundManager, null);
+    }
+
+    public QueryEngine(
+            LlmClient client,
+            ToolRegistry toolRegistry,
+            String model,
+            String systemPrompt,
+            int maxTokens,
+            Path workingDirectory,
+            Consumer<EngineEvent> eventHandler,
+            BackgroundAgentManager backgroundManager,
+            HookExecutor hooks
+    ) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
@@ -68,6 +86,7 @@ public class QueryEngine {
         this.workingDirectory = workingDirectory;
         this.eventHandler = eventHandler;
         this.backgroundManager = backgroundManager;
+        this.hooks = hooks;
     }
 
     /**
@@ -146,10 +165,57 @@ public class QueryEngine {
 
             // Execute each tool call and build a user message with results
             List<ContentBlock> resultBlocks = new ArrayList<>();
+            boolean stopRequested = false;
             for (ContentBlock.ToolUse toolUse : toolUses) {
                 eventHandler.accept(new EngineEvent.ToolExecutionStart(toolUse.name(), toolUse.id()));
 
-                ToolResult result = executeTool(toolUse);
+                JsonNode effectiveInput = toolUse.input();
+                ToolResult result;
+
+                HookDecision pre = hooks != null && !hooks.isEmpty()
+                        ? hooks.runPreToolUse(toolUse.name(), effectiveInput)
+                        : null;
+
+                if (pre instanceof HookDecision.Stop stop) {
+                    eventHandler.accept(new EngineEvent.ToolExecutionEnd(
+                            toolUse.name(), toolUse.id(),
+                            ToolResult.error("Hook stop: " + stop.stopReason())));
+                    eventHandler.accept(new EngineEvent.Error(stop.stopReason()));
+                    stopRequested = true;
+                    break;
+                }
+
+                boolean toolRan;
+                if (pre instanceof HookDecision.Deny deny) {
+                    result = ToolResult.error("Blocked by hook: " + deny.reason());
+                    toolRan = false;
+                } else {
+                    if (pre instanceof HookDecision.ReplaceInput r) {
+                        effectiveInput = r.newInput();
+                    }
+                    result = executeTool(toolUse.name(), effectiveInput);
+                    toolRan = true;
+                }
+
+                if (toolRan && hooks != null && !hooks.isEmpty()) {
+                    HookDecision post = hooks.runPostToolUse(
+                            toolUse.name(), effectiveInput, result.textContent(), result.isError());
+                    if (post instanceof HookDecision.Stop stop) {
+                        eventHandler.accept(new EngineEvent.ToolExecutionEnd(
+                                toolUse.name(), toolUse.id(), result));
+                        resultBlocks.add(new ContentBlock.ToolResult(
+                                toolUse.id(), result.content(), result.isError()));
+                        eventHandler.accept(new EngineEvent.Error(stop.stopReason()));
+                        stopRequested = true;
+                        break;
+                    }
+                    if (post instanceof HookDecision.Allow a && a.additionalContext() != null) {
+                        List<ContentBlock> augmented = new ArrayList<>(result.content());
+                        augmented.add(new ContentBlock.Text(
+                                "\n[hook additionalContext]\n" + a.additionalContext()));
+                        result = new ToolResult(augmented, result.isError());
+                    }
+                }
 
                 eventHandler.accept(new EngineEvent.ToolExecutionEnd(
                         toolUse.name(), toolUse.id(), result));
@@ -160,6 +226,8 @@ public class QueryEngine {
 
             // Add tool results as a user message and loop
             messages.add(new Message.UserMessage(resultBlocks));
+
+            if (stopRequested) break;
         }
 
         if (loopCount >= MAX_TOOL_LOOPS) {
@@ -180,17 +248,17 @@ public class QueryEngine {
         return toolUses;
     }
 
-    private ToolResult executeTool(ContentBlock.ToolUse toolUse) {
-        var toolOpt = toolRegistry.findByName(toolUse.name());
+    private ToolResult executeTool(String toolName, JsonNode toolInput) {
+        var toolOpt = toolRegistry.findByName(toolName);
         if (toolOpt.isEmpty()) {
-            return ToolResult.error("Unknown tool: " + toolUse.name());
+            return ToolResult.error("Unknown tool: " + toolName);
         }
 
         Tool tool = toolOpt.get();
         ToolUseContext context = new ToolUseContext(workingDirectory, false, readFiles);
 
         try {
-            return tool.execute(toolUse.input(), context);
+            return tool.execute(toolInput, context);
         } catch (Exception e) {
             return ToolResult.error("Tool execution failed: " + e.getMessage());
         }
