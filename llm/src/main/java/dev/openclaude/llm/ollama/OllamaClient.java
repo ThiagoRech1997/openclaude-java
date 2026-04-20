@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
@@ -31,6 +32,8 @@ import java.util.function.Consumer;
 public class OllamaClient implements LlmClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private record ToolCallState(String id, String name, JsonNode arguments) {}
 
     private final String baseUrl;
     private final HttpClient httpClient;
@@ -144,6 +147,8 @@ public class OllamaClient implements LlmClient {
         List<ContentBlock> contentBlocks = new ArrayList<>();
         StringBuilder textAccum = new StringBuilder();
         Usage totalUsage = Usage.ZERO;
+        List<ToolCallState> pendingToolCalls = new ArrayList<>();
+        String stopReason = "end_turn";
 
         handler.accept(new StreamEvent.MessageStart("", "", Usage.ZERO));
 
@@ -165,6 +170,38 @@ public class OllamaClient implements LlmClient {
                     }
                 }
 
+                JsonNode toolCalls = message != null ? message.get("tool_calls") : null;
+                if (toolCalls != null && toolCalls.isArray() && !toolCalls.isEmpty()) {
+                    // Flush texto pendente antes de abrir tool_uses
+                    if (textAccum.length() > 0) {
+                        contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
+                        textAccum.setLength(0);
+                    }
+                    for (JsonNode tc : toolCalls) {
+                        JsonNode fn = tc.get("function");
+                        if (fn == null) continue;
+                        String id = "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                        String name = fn.path("name").asText("");
+
+                        // Ollama costuma mandar arguments como objeto JSON (não string),
+                        // mas alguns modelos emitem string JSON. Cobrir ambos os casos.
+                        JsonNode argsNode = fn.get("arguments");
+                        if (argsNode == null) {
+                            argsNode = MAPPER.createObjectNode();
+                        } else if (argsNode.isTextual()) {
+                            try {
+                                argsNode = MAPPER.readTree(argsNode.asText());
+                            } catch (Exception e) {
+                                argsNode = MAPPER.createObjectNode();
+                            }
+                        }
+
+                        handler.accept(new StreamEvent.ToolUseStart(id, name));
+                        handler.accept(new StreamEvent.ToolInputDelta(MAPPER.writeValueAsString(argsNode)));
+                        pendingToolCalls.add(new ToolCallState(id, name, argsNode));
+                    }
+                }
+
                 if (done) {
                     // Extract usage from final message
                     int promptTokens = json.path("prompt_eval_count").asInt(0);
@@ -173,6 +210,15 @@ public class OllamaClient implements LlmClient {
 
                     if (textAccum.length() > 0) {
                         contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
+                        textAccum.setLength(0);
+                    }
+                    int idx = 0;
+                    for (ToolCallState tcs : pendingToolCalls) {
+                        contentBlocks.add(new ContentBlock.ToolUse(tcs.id(), tcs.name(), tcs.arguments()));
+                        handler.accept(new StreamEvent.ContentBlockStop(idx++));
+                    }
+                    if (!pendingToolCalls.isEmpty()) {
+                        stopReason = "tool_use";
                     }
                     break;
                 }
@@ -182,14 +228,14 @@ public class OllamaClient implements LlmClient {
             return;
         }
 
-        handler.accept(new StreamEvent.MessageDelta("end_turn", totalUsage));
+        handler.accept(new StreamEvent.MessageDelta(stopReason, totalUsage));
 
         if (contentBlocks.isEmpty()) {
             contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
         }
 
         Message.AssistantMessage finalMsg = new Message.AssistantMessage(
-                List.copyOf(contentBlocks), "end_turn", totalUsage);
+                List.copyOf(contentBlocks), stopReason, totalUsage);
         handler.accept(new StreamEvent.MessageComplete(finalMsg));
     }
 }
