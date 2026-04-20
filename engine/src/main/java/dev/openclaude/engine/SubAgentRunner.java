@@ -3,6 +3,8 @@ package dev.openclaude.engine;
 import dev.openclaude.core.config.ModelAlias;
 import dev.openclaude.core.model.*;
 import dev.openclaude.core.permissions.PermissionManager;
+import dev.openclaude.engine.agents.SubAgentDefinition;
+import dev.openclaude.engine.agents.SubAgentRegistry;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
 import dev.openclaude.tools.ToolUseContext;
@@ -12,27 +14,14 @@ import dev.openclaude.tools.agent.AgentRunner;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Runs a sub-agent by creating an isolated QueryEngine instance.
- * Supports typed sub-agents (Explore, Plan), model override, and background execution.
+ * Resolves system prompt, tool whitelist, and model override from a {@link SubAgentRegistry};
+ * supports background execution and worktree isolation.
  */
 public class SubAgentRunner implements AgentRunner {
-
-    private static final String GENERAL_PURPOSE_PROMPT =
-            "You are a sub-agent launched to handle a specific task. "
-                    + "Complete the task thoroughly and return a concise summary of what you did and found. "
-                    + "You have access to the same tools as the parent agent.";
-
-    private static final String EXPLORE_PROMPT =
-            "You are an exploration sub-agent optimized for searching and reading code. "
-                    + "You have read-only access — do NOT attempt to create, modify, or delete any files. "
-                    + "Search, read, and analyze the codebase, then return a concise summary of your findings.";
-
-    private static final String PLAN_PROMPT =
-            "You are a planning sub-agent. Your job is to explore the codebase and design implementation plans. "
-                    + "You must NOT create, modify, or delete files. "
-                    + "Analyze the codebase and return a detailed, actionable implementation plan.";
 
     private final LlmClient client;
     private final ToolRegistry toolRegistry;
@@ -40,20 +29,18 @@ public class SubAgentRunner implements AgentRunner {
     private final int maxTokens;
     private final BackgroundAgentManager backgroundManager;
     private final PermissionManager permissions;
+    private final SubAgentRegistry subAgentRegistry;
 
     public SubAgentRunner(LlmClient client, ToolRegistry toolRegistry, String model, int maxTokens,
-                          BackgroundAgentManager backgroundManager) {
-        this(client, toolRegistry, model, maxTokens, backgroundManager, null);
-    }
-
-    public SubAgentRunner(LlmClient client, ToolRegistry toolRegistry, String model, int maxTokens,
-                          BackgroundAgentManager backgroundManager, PermissionManager permissions) {
+                          BackgroundAgentManager backgroundManager, PermissionManager permissions,
+                          SubAgentRegistry subAgentRegistry) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
         this.maxTokens = maxTokens;
         this.backgroundManager = backgroundManager;
         this.permissions = permissions;
+        this.subAgentRegistry = subAgentRegistry;
     }
 
     @Override
@@ -67,9 +54,13 @@ public class SubAgentRunner implements AgentRunner {
     }
 
     private String executeAgent(AgentRunRequest request, ToolUseContext parentContext) {
-        String systemPrompt = resolveSystemPrompt(request.subagentType());
-        String resolvedModel = ModelAlias.resolve(request.model(), this.model);
-        ToolRegistry filteredTools = resolveToolRegistry(request.subagentType());
+        SubAgentDefinition def = subAgentRegistry.get(request.subagentType());
+        if (def == null) def = subAgentRegistry.fallback();
+
+        String systemPrompt = def.systemPrompt();
+        String modelChoice = request.model() != null ? request.model() : def.modelOverride();
+        String resolvedModel = ModelAlias.resolve(modelChoice, this.model);
+        ToolRegistry filteredTools = resolveToolRegistry(def);
 
         Path workDir = parentContext.workingDirectory();
         WorktreeSession session = null;
@@ -128,26 +119,14 @@ public class SubAgentRunner implements AgentRunner {
         return resultText.length() > 0 ? resultText.toString() : "(Agent completed with no text output)";
     }
 
-    private String resolveSystemPrompt(String subagentType) {
-        if (subagentType == null) return GENERAL_PURPOSE_PROMPT;
-        return switch (subagentType) {
-            case "Explore" -> EXPLORE_PROMPT;
-            case "Plan" -> PLAN_PROMPT;
-            default -> GENERAL_PURPOSE_PROMPT;
-        };
-    }
-
-    private ToolRegistry resolveToolRegistry(String subagentType) {
-        if (subagentType == null) {
-            return toolRegistry.filteredCopy(t -> !t.name().equals("Agent"));
+    private ToolRegistry resolveToolRegistry(SubAgentDefinition def) {
+        if (def.toolFilter() != null) {
+            return toolRegistry.filteredCopy(def.toolFilter());
         }
-        return switch (subagentType) {
-            case "Explore" -> toolRegistry.filteredCopy(
-                    t -> (t.isReadOnly() || t.name().equals("Bash")) && !t.name().equals("Agent"));
-            case "Plan" -> toolRegistry.filteredCopy(
-                    t -> !t.name().equals("FileWrite") && !t.name().equals("FileEdit")
-                            && !t.name().equals("Agent"));
-            default -> toolRegistry.filteredCopy(t -> !t.name().equals("Agent"));
-        };
+        if (def.toolWhitelist() != null && !def.toolWhitelist().isEmpty()) {
+            Set<String> allowed = Set.copyOf(def.toolWhitelist());
+            return toolRegistry.filteredCopy(t -> allowed.contains(t.name()) && !t.name().equals("Agent"));
+        }
+        return toolRegistry.filteredCopy(t -> !t.name().equals("Agent"));
     }
 }

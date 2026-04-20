@@ -28,6 +28,9 @@ import dev.openclaude.tools.webfetch.WebFetchTool;
 import dev.openclaude.tools.websearch.WebSearchTool;
 import dev.openclaude.tools.agent.AgentTool;
 import dev.openclaude.engine.SubAgentRunner;
+import dev.openclaude.engine.agents.MarkdownSubAgentLoader;
+import dev.openclaude.engine.agents.SubAgentDefinition;
+import dev.openclaude.engine.agents.SubAgentRegistry;
 import dev.openclaude.plugins.PluginLoader;
 import dev.openclaude.grpc.GrpcAgentServer;
 import dev.openclaude.mcp.McpClientManager;
@@ -250,9 +253,18 @@ public class Main implements Callable<Integer> {
         // AgentTool (sub-agents) — sub-agents inherit the parent's PermissionManager
         // without an interactive handler: any ASK falls through to DENY.
         backgroundManager = new BackgroundAgentManager();
+
+        // Load user/project markdown sub-agent definitions; built-ins live inside the registry.
+        SubAgentRegistry subAgentRegistry = new SubAgentRegistry();
+        Path cwdForAgents = Path.of(System.getProperty("user.dir"));
+        for (SubAgentDefinition def : new MarkdownSubAgentLoader().load(cwdForAgents)) {
+            subAgentRegistry.register(def);
+        }
+
         SubAgentRunner agentRunner = new SubAgentRunner(
-                client, registry, config.model(), config.maxTokens(), backgroundManager, permissions);
-        registry.register(new AgentTool(agentRunner));
+                client, registry, config.model(), config.maxTokens(), backgroundManager, permissions,
+                subAgentRegistry);
+        registry.register(new AgentTool(agentRunner, subAgentRegistry.names()));
 
         // Load plugins
         PluginLoader pluginLoader = new PluginLoader();
