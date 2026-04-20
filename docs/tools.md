@@ -120,11 +120,12 @@ Finds files matching a glob pattern.
 |-----------|------|----------|-------------|
 | `pattern` | string | yes | Glob pattern (e.g., `**/*.java`) |
 | `path` | string | no | Directory to search in |
+| `limit` | int | no | Max results. Default 500. Pass `0` for unlimited. |
 
 **Behavior:**
 - Uses `FileSystems.getPathMatcher`
 - Skips `.git`, `node_modules`, `build`, `.gradle`, `target`
-- Limits to 500 results
+- Limits to 500 results by default (override via `limit`; `0` = unlimited)
 - Sorted by modification time (most recent first)
 
 ### Grep

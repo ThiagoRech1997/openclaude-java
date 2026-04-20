@@ -15,11 +15,12 @@ import java.util.List;
  */
 public class GlobTool implements Tool {
 
-    private static final int MAX_RESULTS = 500;
+    private static final int DEFAULT_LIMIT = 500;
 
     private static final JsonNode SCHEMA = SchemaBuilder.object()
             .stringProp("pattern", "The glob pattern to match files (e.g., '**/*.java').", true)
             .stringProp("path", "Directory to search in. Defaults to working directory.", false)
+            .intProp("limit", "Max number of results. Default 500. Pass 0 for unlimited.", false)
             .build();
 
     @Override
@@ -58,6 +59,14 @@ public class GlobTool implements Tool {
             return ToolResult.error("Directory does not exist: " + searchDir);
         }
 
+        final int limit;
+        if (input.has("limit")) {
+            int raw = input.get("limit").asInt(DEFAULT_LIMIT);
+            limit = (raw <= 0) ? Integer.MAX_VALUE : raw;
+        } else {
+            limit = DEFAULT_LIMIT;
+        }
+
         try {
             PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
             List<Path> matches = new ArrayList<>();
@@ -69,7 +78,7 @@ public class GlobTool implements Tool {
                     if (matcher.matches(relative)) {
                         matches.add(file);
                     }
-                    if (matches.size() >= MAX_RESULTS) {
+                    if (matches.size() >= limit) {
                         return FileVisitResult.TERMINATE;
                     }
                     return FileVisitResult.CONTINUE;
@@ -109,8 +118,8 @@ public class GlobTool implements Tool {
             for (Path match : matches) {
                 sb.append(match).append('\n');
             }
-            if (matches.size() >= MAX_RESULTS) {
-                sb.append("\n(results truncated at ").append(MAX_RESULTS).append(")\n");
+            if (matches.size() >= limit && limit != Integer.MAX_VALUE) {
+                sb.append("\n(results truncated at ").append(limit).append(")\n");
             }
 
             return ToolResult.success(sb.toString());
