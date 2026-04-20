@@ -1,5 +1,6 @@
 package dev.openclaude.tui;
 
+import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 
@@ -73,10 +74,17 @@ public class TerminalScreen implements AutoCloseable {
     }
 
     /**
-     * Enter raw mode for character-by-character input.
+     * Enter raw mode for character-by-character input. Returns the previous
+     * attributes so the caller can restore them via {@link #restoreAttributes}.
      */
-    public void enterRawMode() {
-        terminal.enterRawMode();
+    public Attributes enterRawMode() {
+        return terminal.enterRawMode();
+    }
+
+    public void restoreAttributes(Attributes attributes) {
+        if (attributes != null) {
+            terminal.setAttributes(attributes);
+        }
     }
 
     @Override

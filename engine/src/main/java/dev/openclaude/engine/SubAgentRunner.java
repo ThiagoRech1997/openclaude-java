@@ -2,6 +2,7 @@ package dev.openclaude.engine;
 
 import dev.openclaude.core.config.ModelAlias;
 import dev.openclaude.core.model.*;
+import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
 import dev.openclaude.tools.ToolUseContext;
@@ -38,14 +39,21 @@ public class SubAgentRunner implements AgentRunner {
     private final String model;
     private final int maxTokens;
     private final BackgroundAgentManager backgroundManager;
+    private final PermissionManager permissions;
 
     public SubAgentRunner(LlmClient client, ToolRegistry toolRegistry, String model, int maxTokens,
                           BackgroundAgentManager backgroundManager) {
+        this(client, toolRegistry, model, maxTokens, backgroundManager, null);
+    }
+
+    public SubAgentRunner(LlmClient client, ToolRegistry toolRegistry, String model, int maxTokens,
+                          BackgroundAgentManager backgroundManager, PermissionManager permissions) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
         this.maxTokens = maxTokens;
         this.backgroundManager = backgroundManager;
+        this.permissions = permissions;
     }
 
     @Override
@@ -86,7 +94,7 @@ public class SubAgentRunner implements AgentRunner {
                                 resultText.append(td.text());
                             }
                         }
-                    }
+                    }, null, null, permissions, null
             );
 
             List<Message> messages = engine.run(request.prompt());

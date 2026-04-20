@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.openclaude.core.hooks.HookDecision;
 import dev.openclaude.core.hooks.HookExecutor;
 import dev.openclaude.core.model.*;
+import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.llm.LlmRequest;
 import dev.openclaude.tools.Tool;
@@ -39,6 +40,8 @@ public class QueryEngine {
     private final Consumer<EngineEvent> eventHandler;
     private final BackgroundAgentManager backgroundManager;
     private final HookExecutor hooks;
+    private final PermissionManager permissions;
+    private final PermissionHandler permissionHandler;
     private final Set<Path> readFiles = ConcurrentHashMap.newKeySet();
 
     public QueryEngine(
@@ -78,6 +81,23 @@ public class QueryEngine {
             BackgroundAgentManager backgroundManager,
             HookExecutor hooks
     ) {
+        this(client, toolRegistry, model, systemPrompt, maxTokens, workingDirectory,
+                eventHandler, backgroundManager, hooks, null, null);
+    }
+
+    public QueryEngine(
+            LlmClient client,
+            ToolRegistry toolRegistry,
+            String model,
+            String systemPrompt,
+            int maxTokens,
+            Path workingDirectory,
+            Consumer<EngineEvent> eventHandler,
+            BackgroundAgentManager backgroundManager,
+            HookExecutor hooks,
+            PermissionManager permissions,
+            PermissionHandler permissionHandler
+    ) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
@@ -87,6 +107,8 @@ public class QueryEngine {
         this.eventHandler = eventHandler;
         this.backgroundManager = backgroundManager;
         this.hooks = hooks;
+        this.permissions = permissions;
+        this.permissionHandler = permissionHandler;
     }
 
     /**
@@ -193,8 +215,16 @@ public class QueryEngine {
                     if (pre instanceof HookDecision.ReplaceInput r) {
                         effectiveInput = r.newInput();
                     }
-                    result = executeTool(toolUse.name(), effectiveInput);
-                    toolRan = true;
+                    PermissionManager.PermissionDecision permDecision =
+                            checkPermission(toolUse.name(), effectiveInput);
+                    if (permDecision == PermissionManager.PermissionDecision.DENIED) {
+                        if (permissions != null) permissions.recordDenial(toolUse.name());
+                        result = ToolResult.error("Denied by permission policy: " + toolUse.name());
+                        toolRan = false;
+                    } else {
+                        result = executeTool(toolUse.name(), effectiveInput);
+                        toolRan = true;
+                    }
                 }
 
                 if (toolRan && hooks != null && !hooks.isEmpty()) {
@@ -246,6 +276,26 @@ public class QueryEngine {
             }
         }
         return toolUses;
+    }
+
+    private PermissionManager.PermissionDecision checkPermission(String toolName, JsonNode input) {
+        if (permissions == null) {
+            return PermissionManager.PermissionDecision.ALLOWED;
+        }
+        boolean isReadOnly = toolRegistry.findByName(toolName)
+                .map(Tool::isReadOnly)
+                .orElse(false);
+        PermissionManager.PermissionDecision decision = permissions.check(toolName, isReadOnly);
+        if (decision != PermissionManager.PermissionDecision.ASK) {
+            return decision;
+        }
+        if (permissionHandler == null) {
+            return PermissionManager.PermissionDecision.DENIED;
+        }
+        PermissionManager.PermissionDecision resolved = permissionHandler.ask(toolName, input, isReadOnly);
+        return resolved == PermissionManager.PermissionDecision.ALLOWED
+                ? PermissionManager.PermissionDecision.ALLOWED
+                : PermissionManager.PermissionDecision.DENIED;
     }
 
     private ToolResult executeTool(String toolName, JsonNode toolInput) {

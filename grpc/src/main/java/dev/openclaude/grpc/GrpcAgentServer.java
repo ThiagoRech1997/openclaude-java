@@ -3,6 +3,7 @@ package dev.openclaude.grpc;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.openclaude.core.model.StreamEvent;
+import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.engine.BackgroundAgentManager;
 import dev.openclaude.engine.EngineEvent;
 import dev.openclaude.engine.QueryEngine;
@@ -48,12 +49,20 @@ public class GrpcAgentServer {
     private final int maxTokens;
     private final int port;
     private final BackgroundAgentManager backgroundManager;
+    private final PermissionManager permissions;
     private volatile boolean running = false;
     private ServerSocket serverSocket;
 
     public GrpcAgentServer(LlmClient client, ToolRegistry toolRegistry,
                            String model, String systemPrompt, int maxTokens, int port,
                            BackgroundAgentManager backgroundManager) {
+        this(client, toolRegistry, model, systemPrompt, maxTokens, port, backgroundManager, null);
+    }
+
+    public GrpcAgentServer(LlmClient client, ToolRegistry toolRegistry,
+                           String model, String systemPrompt, int maxTokens, int port,
+                           BackgroundAgentManager backgroundManager,
+                           PermissionManager permissions) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
@@ -61,6 +70,7 @@ public class GrpcAgentServer {
         this.maxTokens = maxTokens;
         this.port = port;
         this.backgroundManager = backgroundManager;
+        this.permissions = permissions;
     }
 
     /**
@@ -160,7 +170,7 @@ public class GrpcAgentServer {
             } catch (Exception e) {
                 // Ignore serialization errors
             }
-        }, backgroundManager);
+        }, backgroundManager, null, permissions, null);
 
         engine.run(message);
     }

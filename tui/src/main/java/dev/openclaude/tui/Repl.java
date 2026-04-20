@@ -71,6 +71,8 @@ public class Repl {
                     config, toolRegistry, permissions, session,
                     workingDirectory, screen.getWidth(), commandRegistry);
 
+            ReplPermissionHandler permissionHandler = new ReplPermissionHandler(screen, permissions);
+
             while (true) {
                 String userInput = input.readLineSafe();
 
@@ -88,12 +90,12 @@ public class Repl {
                 if (trimmed.startsWith("/")) {
                     CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
                     if (result != null) {
-                        if (!handleCommandResult(result, screen, display)) break;
+                        if (!handleCommandResult(result, screen, display, permissionHandler)) break;
                         continue;
                     }
                 }
 
-                if (!runAgentTurn(trimmed, display, screen)) break;
+                if (!runAgentTurn(trimmed, display, screen, permissionHandler)) break;
             }
         } catch (IOException e) {
             System.err.println("Failed to initialize terminal: " + e.getMessage());
@@ -104,7 +106,7 @@ public class Repl {
      * Run one agent turn on {@code prompt}. Returns false if the hook pipeline asked the REPL to stop.
      */
     private boolean runAgentTurn(String prompt, AgentDisplay display,
-                                 TerminalScreen screen) {
+                                 TerminalScreen screen, ReplPermissionHandler permissionHandler) {
         screen.println();
         session.incrementTurn();
 
@@ -133,7 +135,7 @@ public class Repl {
             if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
                 session.addUsage(done.totalUsage());
             }
-        }, backgroundManager, hooks);
+        }, backgroundManager, hooks, permissions, permissionHandler);
 
         engine.run(effectivePrompt);
         screen.println();
@@ -145,9 +147,9 @@ public class Repl {
      * (only the Stop-hook path does so today — EXIT still calls System.exit).
      */
     private boolean handleCommandResult(CommandResult result, TerminalScreen screen,
-                                        AgentDisplay display) {
+                                        AgentDisplay display, ReplPermissionHandler permissionHandler) {
         if (result.action() == CommandResult.Action.SUBMIT_PROMPT) {
-            return runAgentTurn(result.output(), display, screen);
+            return runAgentTurn(result.output(), display, screen, permissionHandler);
         }
 
         if (result.output() != null) {

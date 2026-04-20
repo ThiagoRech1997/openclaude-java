@@ -37,6 +37,7 @@ import dev.openclaude.mcp.config.McpServerConfig;
 import dev.openclaude.commands.CommandRegistry;
 import dev.openclaude.commands.CommandRegistryFactory;
 import dev.openclaude.core.permissions.PermissionManager;
+import dev.openclaude.core.permissions.PermissionMode;
 import dev.openclaude.tui.Ansi;
 import dev.openclaude.tui.Repl;
 import picocli.CommandLine;
@@ -79,6 +80,10 @@ public class Main implements Callable<Integer> {
     @Option(names = {"--no-claude-md"}, description = "Disable auto-loading of CLAUDE.md files.")
     private boolean disableClaudeMd;
 
+    @Option(names = {"--dangerously-skip-permissions"},
+            description = "Auto-approve every tool call for the session. No prompt, no denial. Use with care.")
+    private boolean dangerouslySkipPermissions;
+
     private BackgroundAgentManager backgroundManager;
     private BackgroundProcessManager processManager;
 
@@ -99,11 +104,14 @@ public class Main implements Callable<Integer> {
             }
         }
 
+        boolean interactive = prompt == null && !printMode && !serveMode;
+        PermissionManager permissions = resolvePermissions(interactive);
+
         // Headless server mode
         if (serveMode) {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
-            ToolRegistry tools = createToolRegistry(client, config);
+            ToolRegistry tools = createToolRegistry(client, config, permissions);
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (processManager != null) processManager.shutdown();
@@ -111,7 +119,8 @@ public class Main implements Callable<Integer> {
             }, "openclaude-shutdown"));
 
             GrpcAgentServer server = new GrpcAgentServer(
-                    client, tools, config.model(), effectiveSystemPrompt, config.maxTokens(), port, backgroundManager);
+                    client, tools, config.model(), effectiveSystemPrompt, config.maxTokens(), port,
+                    backgroundManager, permissions);
             try {
                 server.start();
             } catch (Exception e) {
@@ -125,10 +134,9 @@ public class Main implements Callable<Integer> {
         if (prompt == null && !printMode) {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
-            ToolRegistry tools = createToolRegistry(client, config);
+            ToolRegistry tools = createToolRegistry(client, config, permissions);
 
             CommandRegistry commands = new CommandRegistryFactory().create(cwd);
-            PermissionManager permissions = new PermissionManager();
             HookExecutor hooks = buildHookExecutor(cwd);
 
             Repl repl = new Repl(config, client, tools, cwd, effectiveSystemPrompt, commands, permissions,
@@ -150,7 +158,7 @@ public class Main implements Callable<Integer> {
         config.validate();
 
         LlmClient client = LlmClientFactory.create(config);
-        ToolRegistry tools = createToolRegistry(client, config);
+        ToolRegistry tools = createToolRegistry(client, config, permissions);
 
         System.out.println(Ansi.DIM + config.provider() + " / " + config.model()
                 + " | " + tools.size() + " tools" + Ansi.RESET);
@@ -160,13 +168,26 @@ public class Main implements Callable<Integer> {
 
         QueryEngine engine = new QueryEngine(
                 client, tools, config.model(), effectiveSystemPrompt,
-                config.maxTokens(), cwd, this::handlePrintEvent, backgroundManager, hooks
+                config.maxTokens(), cwd, this::handlePrintEvent, backgroundManager, hooks,
+                permissions, null
         );
 
         engine.run(prompt);
         backgroundManager.shutdown();
 
         return 0;
+    }
+
+    private PermissionManager resolvePermissions(boolean interactive) {
+        PermissionMode mode;
+        if (dangerouslySkipPermissions) {
+            mode = PermissionMode.AUTO_APPROVE;
+        } else if (interactive) {
+            mode = PermissionMode.DEFAULT;
+        } else {
+            mode = PermissionMode.AUTO_DENY;
+        }
+        return new PermissionManager(mode);
     }
 
     private void handlePrintEvent(EngineEvent event) {
@@ -210,7 +231,7 @@ public class Main implements Callable<Integer> {
         return new HookExecutor(hookConfig, UUID.randomUUID().toString(), cwd);
     }
 
-    private ToolRegistry createToolRegistry(LlmClient client, AppConfig config) {
+    private ToolRegistry createToolRegistry(LlmClient client, AppConfig config, PermissionManager permissions) {
         ToolRegistry registry = new ToolRegistry();
         processManager = new BackgroundProcessManager();
         registry.register(new BashTool(processManager));
@@ -226,10 +247,11 @@ public class Main implements Callable<Integer> {
         registry.register(new WebSearchTool());
         registry.register(new TodoWriteTool(new TodoStore()));
 
-        // AgentTool (sub-agents)
+        // AgentTool (sub-agents) — sub-agents inherit the parent's PermissionManager
+        // without an interactive handler: any ASK falls through to DENY.
         backgroundManager = new BackgroundAgentManager();
         SubAgentRunner agentRunner = new SubAgentRunner(
-                client, registry, config.model(), config.maxTokens(), backgroundManager);
+                client, registry, config.model(), config.maxTokens(), backgroundManager, permissions);
         registry.register(new AgentTool(agentRunner));
 
         // Load plugins
