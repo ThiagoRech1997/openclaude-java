@@ -27,7 +27,12 @@ public class PermissionsCommand implements Command {
                 }
                 case "plan" -> {
                     pm.setMode(PermissionMode.PLAN);
-                    yield CommandResult.text("  Permission mode set to: PLAN (read-only)");
+                    yield CommandResult.text("""
+                              Permission mode set to: PLAN
+                              The model will research with read-only tools and produce an \
+                            implementation plan instead of making changes. When the plan is \
+                            ready it calls ExitPlanMode and you will be asked to approve it — \
+                            approving returns the session to DEFAULT mode.""");
                 }
                 case "deny" -> {
                     pm.setMode(PermissionMode.AUTO_DENY);

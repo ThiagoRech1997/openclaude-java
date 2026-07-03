@@ -11,6 +11,8 @@ import dev.openclaude.engine.BackgroundAgentManager;
 import dev.openclaude.engine.QueryEngine;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
+import dev.openclaude.tools.plan.ExitPlanModeTool;
+import dev.openclaude.tui.render.MarkdownRenderer;
 import dev.openclaude.tui.widget.AgentDisplay;
 import dev.openclaude.tui.widget.TextInput;
 
@@ -92,6 +94,13 @@ public class Repl {
                     workingDirectory, screen.getWidth(), commandRegistry);
 
             ReplPermissionHandler permissionHandler = new ReplPermissionHandler(screen, permissions);
+
+            // Wire the plan-approval UI into the ExitPlanMode tool, if registered
+            toolRegistry.findByName("ExitPlanMode").ifPresent(tool -> {
+                if (tool instanceof ExitPlanModeTool exitPlanMode) {
+                    exitPlanMode.setApprovalHandler(plan -> approvePlan(plan, screen));
+                }
+            });
 
             // Factory so custom commands with allowed-tools can run one turn on a
             // restricted registry without touching the session engine.
@@ -254,6 +263,38 @@ public class Repl {
             case SUBMIT_PROMPT -> { /* handled above */ }
         }
         return true;
+    }
+
+    /** Renders the model's plan and asks the user to approve leaving plan mode. */
+    private boolean approvePlan(String plan, TerminalScreen screen) {
+        screen.println();
+        screen.println(Ansi.BOLD + Ansi.CYAN + "  ── Proposed plan ──" + Ansi.RESET);
+        screen.println();
+        screen.print(MarkdownRenderer.render(plan, screen.getWidth()));
+        screen.println();
+        screen.println("  " + Ansi.GREEN + "(y)" + Ansi.RESET + " approve and exit plan mode   "
+                + Ansi.RED + "(n)" + Ansi.RESET + " reject, keep planning " + Ansi.DIM + "[default]" + Ansi.RESET);
+        screen.print("  > ");
+        screen.flush();
+
+        int c = readSingleChar(screen);
+        screen.println();
+        boolean approved = c == 'y' || c == 'Y';
+        screen.println(approved
+                ? "  " + Ansi.GREEN + "(plan approved — plan mode off)" + Ansi.RESET
+                : "  " + Ansi.YELLOW + "(plan rejected — still in plan mode)" + Ansi.RESET);
+        return approved;
+    }
+
+    private int readSingleChar(TerminalScreen screen) {
+        var previous = screen.enterRawMode();
+        try {
+            return screen.getTerminal().reader().read();
+        } catch (IOException e) {
+            return -1;
+        } finally {
+            screen.restoreAttributes(previous);
+        }
     }
 
     private String promptString() {

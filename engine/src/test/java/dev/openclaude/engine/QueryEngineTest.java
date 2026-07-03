@@ -440,6 +440,45 @@ class QueryEngineTest {
         assertEquals(4, updated.size());
     }
 
+    @Test
+    void planMode_appendsPlanPromptToSystemPrompt() {
+        ToolRegistry registry = new ToolRegistry();
+        PermissionManager pm = new PermissionManager(PermissionMode.PLAN);
+        List<StreamEvent> endTurn = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.TextDelta("here is the plan"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.MessageDelta("end_turn", Usage.ZERO)
+        );
+        ScriptedLlmClient client = scriptedClient(List.of(endTurn));
+
+        new QueryEngine(client, registry, "test-model", "base prompt", 1024,
+                Path.of("."), e -> {}, null, null, pm, null).run("do something");
+
+        String sent = client.capturedSystemPrompts.get(0);
+        assertTrue(sent.startsWith("base prompt"), "base prompt must be preserved");
+        assertTrue(sent.contains("PLAN MODE"), "plan-mode instructions must be appended");
+        assertTrue(sent.contains("ExitPlanMode"));
+    }
+
+    @Test
+    void defaultMode_doesNotInjectPlanPrompt() {
+        ToolRegistry registry = new ToolRegistry();
+        PermissionManager pm = new PermissionManager(PermissionMode.DEFAULT);
+        List<StreamEvent> endTurn = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.TextDelta("ok"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.MessageDelta("end_turn", Usage.ZERO)
+        );
+        ScriptedLlmClient client = scriptedClient(List.of(endTurn));
+
+        new QueryEngine(client, registry, "test-model", "base prompt", 1024,
+                Path.of("."), e -> {}, null, null, pm, null).run("do something");
+
+        assertEquals("base prompt", client.capturedSystemPrompts.get(0));
+    }
+
     // ---------- helpers ----------
 
     private static String contentText(List<ContentBlock> blocks) {
@@ -479,6 +518,7 @@ class QueryEngineTest {
         private final List<List<StreamEvent>> responses;
         /** Snapshots of the messages list at each call (engine reuses the list, so we copy). */
         final List<List<Message>> capturedMessages = new ArrayList<>();
+        final List<String> capturedSystemPrompts = new ArrayList<>();
         private int call = 0;
 
         ScriptedLlmClient(List<List<StreamEvent>> responses) {
@@ -488,6 +528,7 @@ class QueryEngineTest {
         @Override
         public void streamMessage(LlmRequest request, Consumer<StreamEvent> eventHandler) {
             capturedMessages.add(List.copyOf(request.messages()));
+            capturedSystemPrompts.add(request.systemPrompt());
             List<StreamEvent> events = responses.get(Math.min(call, responses.size() - 1));
             call++;
             for (StreamEvent e : events) {

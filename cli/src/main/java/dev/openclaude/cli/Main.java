@@ -285,6 +285,7 @@ public class Main implements Callable<Integer> {
         registry.register(new WebFetchTool());
         registry.register(new WebSearchTool());
         registry.register(new TodoWriteTool(new TodoStore()));
+        registry.register(new dev.openclaude.tools.plan.ExitPlanModeTool(permissions));
 
         // AgentTool (sub-agents) — sub-agents inherit the parent's PermissionManager
         // without an interactive handler: any ASK falls through to DENY.

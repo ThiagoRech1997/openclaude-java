@@ -83,9 +83,24 @@ The `PermissionManager` controls which tools can execute:
 | Mode | Behavior |
 |------|----------|
 | `DEFAULT` | Ask for dangerous ops, auto-allow read-only tools |
-| `PLAN` | Read-only only — no mutation tools |
+| `PLAN` | Plan mode — see below |
 | `AUTO_APPROVE` | Allow all tools without prompting |
 | `AUTO_DENY` | Deny all non-read-only tools |
+
+### Plan Mode
+
+`/permissions plan` does two things:
+
+1. **Permission gate** — only read-only tools may run; mutation tools (Write, Edit, Bash, ...) are denied.
+2. **Behavior change** — a dedicated system prompt instructs the model to research with
+   read-only tools and produce an implementation plan (steps, files affected, trade-offs)
+   instead of making changes.
+
+When the plan is complete, the model calls the `ExitPlanMode` tool. The REPL renders the
+plan and asks for approval: approving switches the session back to `DEFAULT` so the model
+can implement; rejecting keeps plan mode active and the model revises. In non-interactive
+modes (`-p`, `--serve`) there is no approval UI, so `ExitPlanMode` refuses and the session
+stays in plan mode.
 
 ### Permission Rules
 

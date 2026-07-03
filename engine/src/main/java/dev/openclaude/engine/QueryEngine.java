@@ -6,6 +6,7 @@ import dev.openclaude.core.hooks.HookDecision;
 import dev.openclaude.core.hooks.HookExecutor;
 import dev.openclaude.core.model.*;
 import dev.openclaude.core.permissions.PermissionManager;
+import dev.openclaude.core.permissions.PermissionMode;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.llm.LlmRequest;
 import dev.openclaude.tools.Tool;
@@ -30,6 +31,17 @@ public class QueryEngine {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_TOOL_LOOPS = 50; // Safety limit
+
+    /** Appended to the system prompt while the session is in plan mode. */
+    static final String PLAN_MODE_PROMPT = """
+            == PLAN MODE ==
+            You are in plan mode. Do NOT make any changes: no file writes or edits, \
+            no state-changing commands, and do not output implementation code as the answer. \
+            Use read-only tools (Read, Grep, Glob, WebFetch, ...) to research as needed.
+            Produce a concrete implementation plan: numbered steps, files affected, and \
+            trade-offs considered. When the plan is complete, call the ExitPlanMode tool \
+            with the full plan in markdown and wait for the user's approval. \
+            Do not begin implementing until the user approves the plan.""";
 
     private final LlmClient client;
     private final ToolRegistry toolRegistry;
@@ -157,8 +169,15 @@ public class QueryEngine {
                 }
             }
 
-            // Build request with tools
-            LlmRequest request = new LlmRequest(model, systemPrompt, messages, maxTokens)
+            // Build request with tools. The plan-mode prompt is resolved every
+            // iteration so ExitPlanMode approval mid-run takes effect immediately.
+            String effectiveSystemPrompt = systemPrompt;
+            if (permissions != null && permissions.getMode() == PermissionMode.PLAN) {
+                effectiveSystemPrompt = (systemPrompt == null || systemPrompt.isBlank())
+                        ? PLAN_MODE_PROMPT
+                        : systemPrompt + "\n\n" + PLAN_MODE_PROMPT;
+            }
+            LlmRequest request = new LlmRequest(model, effectiveSystemPrompt, messages, maxTokens)
                     .withTools(toolRegistry.toApiToolsArray());
 
             // Stream the response and collect the assistant message
