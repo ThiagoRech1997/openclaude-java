@@ -112,11 +112,20 @@ public class QueryEngine {
     }
 
     /**
-     * Run the agent loop for a user prompt.
+     * Run the agent loop for a user prompt, starting a fresh conversation.
      * Returns the final list of messages (full conversation).
      */
     public List<Message> run(String userPrompt) {
-        List<Message> messages = new ArrayList<>();
+        return run(List.of(), userPrompt);
+    }
+
+    /**
+     * Run the agent loop for a user prompt, continuing from prior conversation
+     * history. The history is copied, never mutated; the returned list is the
+     * full updated conversation including the new turn.
+     */
+    public List<Message> run(List<Message> history, String userPrompt) {
+        List<Message> messages = new ArrayList<>(history);
         messages.add(new Message.UserMessage(userPrompt));
 
         Usage totalUsage = Usage.ZERO;

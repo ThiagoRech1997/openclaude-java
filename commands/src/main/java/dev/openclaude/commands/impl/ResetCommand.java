@@ -9,7 +9,7 @@ public class ResetCommand implements Command {
 
     @Override
     public CommandResult execute(String args, CommandContext ctx) {
-        ctx.session().clearMessages();
+        ctx.session().reset();
         return CommandResult.reset("  Conversation reset. Starting fresh.");
     }
 }

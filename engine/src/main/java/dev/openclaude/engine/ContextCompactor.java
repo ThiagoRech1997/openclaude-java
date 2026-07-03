@@ -37,6 +37,16 @@ public class ContextCompactor {
         }
 
         int splitPoint = messages.size() - keepLastN;
+        // The kept tail must start on a plain user message. Starting on a
+        // tool_result (whose tool_use got summarized away) or on an assistant
+        // turn (two consecutive assistant messages after the summary ack)
+        // produces a history the API rejects.
+        while (splitPoint > 0 && !isPlainUserMessage(messages.get(splitPoint))) {
+            splitPoint--;
+        }
+        if (splitPoint <= 2) {
+            return messages; // No safe boundary with enough prefix to compact
+        }
         List<Message> toSummarize = messages.subList(0, splitPoint);
         List<Message> toKeep = messages.subList(splitPoint, messages.size());
 
@@ -78,6 +88,18 @@ public class ContextCompactor {
         compacted.addAll(toKeep);
 
         return compacted;
+    }
+
+    private static boolean isPlainUserMessage(Message msg) {
+        if (!(msg instanceof Message.UserMessage)) {
+            return false;
+        }
+        for (ContentBlock block : msg.content()) {
+            if (block instanceof ContentBlock.ToolResult) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private String getSummary(String input) {

@@ -51,6 +51,13 @@ public class SessionManager {
 
     public void clearMessages() {
         messages.clear();
+    }
+
+    /**
+     * Full reset: conversation, usage, and turn counters.
+     */
+    public void reset() {
+        messages.clear();
         totalUsage = Usage.ZERO;
         turnCount = 0;
     }

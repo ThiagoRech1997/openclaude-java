@@ -217,6 +217,66 @@ class QueryEngineTest {
                 "when no PermissionManager is wired, engine falls through and tool executes");
     }
 
+    @Test
+    void run_withHistory_sendsFullConversationAndReturnsIt() {
+        ToolRegistry registry = new ToolRegistry();
+        List<StreamEvent> endTurn = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.TextDelta("second answer"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.MessageDelta("end_turn", new Usage(1, 1, 0, 0))
+        );
+        ScriptedLlmClient client = scriptedClient(List.of(endTurn));
+
+        List<Message> history = List.of(
+                new Message.UserMessage("first question"),
+                new Message.AssistantMessage(
+                        List.of(new ContentBlock.Text("first answer")), "end_turn", Usage.ZERO)
+        );
+
+        QueryEngine engine = new QueryEngine(
+                client, registry, "test-model", "sys", 1024, Path.of("."),
+                e -> {}, null, null, null, null
+        );
+
+        List<Message> updated = engine.run(history, "second question");
+
+        // The LLM must see the prior turns plus the new prompt
+        List<Message> sent = client.capturedMessages.get(0);
+        assertEquals(3, sent.size());
+        assertEquals(history.get(0), sent.get(0));
+        assertEquals(history.get(1), sent.get(1));
+
+        // Returned conversation = history + new user turn + new assistant turn
+        assertEquals(4, updated.size());
+        assertEquals(history.get(0), updated.get(0));
+        assertTrue(updated.get(3) instanceof Message.AssistantMessage);
+    }
+
+    @Test
+    void run_withHistory_doesNotMutateCallerList() {
+        ToolRegistry registry = new ToolRegistry();
+        List<StreamEvent> endTurn = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.TextDelta("ok"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.MessageDelta("end_turn", Usage.ZERO)
+        );
+        List<Message> history = List.of(new Message.UserMessage("q"),
+                new Message.AssistantMessage(
+                        List.of(new ContentBlock.Text("a")), "end_turn", Usage.ZERO));
+
+        QueryEngine engine = new QueryEngine(
+                scriptedClient(List.of(endTurn)), registry, "test-model", "sys", 1024,
+                Path.of("."), e -> {}, null, null, null, null
+        );
+
+        // History is an immutable List.of — run() must copy, not append in place
+        List<Message> updated = engine.run(history, "next");
+        assertEquals(2, history.size());
+        assertEquals(4, updated.size());
+    }
+
     // ---------- helpers ----------
 
     private static String contentText(List<ContentBlock> blocks) {

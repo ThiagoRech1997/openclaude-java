@@ -4,6 +4,7 @@ import dev.openclaude.commands.*;
 import dev.openclaude.core.config.AppConfig;
 import dev.openclaude.core.hooks.HookDecision;
 import dev.openclaude.core.hooks.HookExecutor;
+import dev.openclaude.core.model.Message;
 import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.core.session.SessionManager;
 import dev.openclaude.engine.BackgroundAgentManager;
@@ -15,6 +16,7 @@ import dev.openclaude.tui.widget.TextInput;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Interactive REPL (Read-Eval-Print Loop) for the coding agent.
@@ -73,6 +75,17 @@ public class Repl {
 
             ReplPermissionHandler permissionHandler = new ReplPermissionHandler(screen, permissions);
 
+            // One engine for the whole session so per-session tool state
+            // (e.g. files read, required by FileWriteTool) survives across turns.
+            QueryEngine engine = new QueryEngine(
+                    client, toolRegistry, config.model(), systemPrompt,
+                    config.maxTokens(), workingDirectory, event -> {
+                display.handleEvent(event);
+                if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
+                    session.addUsage(done.totalUsage());
+                }
+            }, backgroundManager, hooks, permissions, permissionHandler);
+
             while (true) {
                 String userInput = input.readLineSafe();
 
@@ -90,12 +103,12 @@ public class Repl {
                 if (trimmed.startsWith("/")) {
                     CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
                     if (result != null) {
-                        if (!handleCommandResult(result, screen, display, permissionHandler)) break;
+                        if (!handleCommandResult(result, screen, engine)) break;
                         continue;
                     }
                 }
 
-                if (!runAgentTurn(trimmed, display, screen, permissionHandler)) break;
+                if (!runAgentTurn(trimmed, engine, screen)) break;
             }
         } catch (IOException e) {
             System.err.println("Failed to initialize terminal: " + e.getMessage());
@@ -105,8 +118,7 @@ public class Repl {
     /**
      * Run one agent turn on {@code prompt}. Returns false if the hook pipeline asked the REPL to stop.
      */
-    private boolean runAgentTurn(String prompt, AgentDisplay display,
-                                 TerminalScreen screen, ReplPermissionHandler permissionHandler) {
+    private boolean runAgentTurn(String prompt, QueryEngine engine, TerminalScreen screen) {
         screen.println();
         session.incrementTurn();
 
@@ -128,16 +140,9 @@ public class Repl {
             }
         }
 
-        QueryEngine engine = new QueryEngine(
-                client, toolRegistry, config.model(), systemPrompt,
-                config.maxTokens(), workingDirectory, event -> {
-            display.handleEvent(event);
-            if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
-                session.addUsage(done.totalUsage());
-            }
-        }, backgroundManager, hooks, permissions, permissionHandler);
-
-        engine.run(effectivePrompt);
+        int priorCount = session.getMessages().size();
+        List<Message> updated = engine.run(session.getMessages(), effectivePrompt);
+        session.addMessages(updated.subList(priorCount, updated.size()));
         screen.println();
         return true;
     }
@@ -147,9 +152,9 @@ public class Repl {
      * (only the Stop-hook path does so today — EXIT still calls System.exit).
      */
     private boolean handleCommandResult(CommandResult result, TerminalScreen screen,
-                                        AgentDisplay display, ReplPermissionHandler permissionHandler) {
+                                        QueryEngine engine) {
         if (result.action() == CommandResult.Action.SUBMIT_PROMPT) {
-            return runAgentTurn(result.output(), display, screen, permissionHandler);
+            return runAgentTurn(result.output(), engine, screen);
         }
 
         if (result.output() != null) {
