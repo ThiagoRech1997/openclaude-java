@@ -108,7 +108,12 @@ public class MonitorTool implements Tool {
 
         String patternStr = input.path("pattern").asText(null);
         if (patternStr != null && !patternStr.isEmpty()) {
-            Pattern regex = Pattern.compile(patternStr);
+            Pattern regex;
+            try {
+                regex = Pattern.compile(patternStr);
+            } catch (java.util.regex.PatternSyntaxException e) {
+                return ToolResult.error("Invalid pattern regex: " + e.getMessage());
+            }
             lines = lines.stream()
                     .filter(line -> regex.matcher(line).find())
                     .collect(Collectors.toList());
@@ -134,7 +139,9 @@ public class MonitorTool implements Tool {
         // Two-stage auto-cleanup: remove only when the process has exited AND there was nothing
         // new to drain on this call (so a prior call already surfaced the exit status). Uses the
         // pre-filter drain count so a non-matching pattern doesn't mimic "empty buffer".
-        if (exited && !drainedAnything) {
+        // The reader thread must be done too — the process flips to "exited" before the
+        // pipe is fully drained, and cleaning up early discards that pending output.
+        if (exited && !drainedAnything && !bgProcess.readerThread().isAlive()) {
             processManager.removeProcess(processId);
         }
 

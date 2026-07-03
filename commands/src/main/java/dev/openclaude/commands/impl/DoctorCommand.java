@@ -69,8 +69,8 @@ public class DoctorCommand implements Command {
         // Plugins dir
         Path pluginsDir = Path.of(System.getProperty("user.home"), ".claude", "plugins");
         if (Files.isDirectory(pluginsDir)) {
-            try {
-                long count = Files.list(pluginsDir).filter(p -> p.toString().endsWith(".jar")).count();
+            try (var files = Files.list(pluginsDir)) {
+                long count = files.filter(p -> p.toString().endsWith(".jar")).count();
                 sb.append(check("Plugins", count + " JAR(s) in ~/.claude/plugins/", true));
             } catch (Exception e) {
                 sb.append(check("Plugins", "error reading directory", false));

@@ -20,16 +20,14 @@ import java.util.stream.Stream;
 public final class PluginLoader {
 
     private final List<Plugin> loadedPlugins = new ArrayList<>();
+    private final List<URLClassLoader> pluginClassLoaders = new ArrayList<>();
 
     /**
      * Load all plugins from ServiceLoader and the plugins directory.
      */
     public List<Plugin> loadAll() {
         // 1. ServiceLoader (classpath plugins)
-        ServiceLoader<Plugin> serviceLoader = ServiceLoader.load(Plugin.class);
-        for (Plugin plugin : serviceLoader) {
-            loadPlugin(plugin);
-        }
+        loadFromServiceLoader(ServiceLoader.load(Plugin.class));
 
         // 2. JAR plugins from ~/.claude/plugins/
         Path pluginDir = getPluginDirectory();
@@ -72,6 +70,36 @@ public final class PluginLoader {
             } catch (Exception ignored) {}
         }
         loadedPlugins.clear();
+        for (URLClassLoader loader : pluginClassLoaders) {
+            try {
+                loader.close();
+            } catch (Exception ignored) {}
+        }
+        pluginClassLoaders.clear();
+    }
+
+    /**
+     * Iterate a ServiceLoader defensively: a single malformed provider throws
+     * {@link ServiceConfigurationError} (an Error, not Exception) and must not
+     * abort CLI startup.
+     */
+    private void loadFromServiceLoader(ServiceLoader<Plugin> serviceLoader) {
+        Iterator<Plugin> it = serviceLoader.iterator();
+        while (true) {
+            boolean hasNext;
+            try {
+                hasNext = it.hasNext();
+            } catch (ServiceConfigurationError e) {
+                System.err.println("Warning: plugin discovery aborted: " + e.getMessage());
+                return;
+            }
+            if (!hasNext) return;
+            try {
+                loadPlugin(it.next());
+            } catch (ServiceConfigurationError e) {
+                System.err.println("Warning: skipping broken plugin provider: " + e.getMessage());
+            }
+        }
     }
 
     private void loadPlugin(Plugin plugin) {
@@ -103,11 +131,9 @@ public final class PluginLoader {
                     jarUrls.toArray(new URL[0]),
                     getClass().getClassLoader()
             );
+            pluginClassLoaders.add(classLoader);
 
-            ServiceLoader<Plugin> loader = ServiceLoader.load(Plugin.class, classLoader);
-            for (Plugin plugin : loader) {
-                loadPlugin(plugin);
-            }
+            loadFromServiceLoader(ServiceLoader.load(Plugin.class, classLoader));
         } catch (Exception e) {
             // Silently skip plugin loading errors
         }

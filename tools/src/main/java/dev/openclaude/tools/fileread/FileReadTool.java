@@ -88,14 +88,32 @@ public class FileReadTool implements Tool {
         };
 
         if (!result.isError()) {
-            context.readFiles().add(path.toAbsolutePath().normalize());
+            // Record the symlink-resolved path so the Write tool's overwrite
+            // guard compares against what the OS will actually touch
+            context.readFiles().add(resolveForTracking(path));
         }
         return result;
+    }
+
+    /** Real path when resolvable (follows symlinks), lexical normalization otherwise. */
+    static Path resolveForTracking(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return path.toAbsolutePath().normalize();
+        }
     }
 
     private ToolResult readText(Path path, JsonNode input) {
         int offset = input.has("offset") ? input.get("offset").asInt(0) : 0;
         int limit = input.has("limit") ? input.get("limit").asInt(DEFAULT_MAX_LINES) : DEFAULT_MAX_LINES;
+
+        if (offset < 0) {
+            return ToolResult.error("offset must be >= 0, got " + offset);
+        }
+        if (limit <= 0) {
+            return ToolResult.error("limit must be > 0, got " + limit);
+        }
 
         try {
             List<String> allLines = Files.readAllLines(path);

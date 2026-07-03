@@ -126,6 +126,34 @@ class MonitorToolTest {
         }
 
         @Test
+        void shortLivedProcessOutputIsNeverLostToEarlyCleanup() throws Exception {
+            // The process exits before the reader thread drains the pipe; polls
+            // landing in that window must NOT remove the entry (and its output)
+            String id = startBash("echo precious-output");
+            var bp = manager.getProcess(id);
+            assertTrue(bp.process().waitFor(3, TimeUnit.SECONDS));
+
+            StringBuilder seen = new StringBuilder();
+            long deadline = System.currentTimeMillis() + 3_000;
+            while (System.currentTimeMillis() < deadline && seen.indexOf("precious-output") < 0) {
+                ToolResult r = tool.execute(input().put("process_id", id), context);
+                if (r.isError()) break; // entry removed — output lost
+                seen.append(r.textContent()).append('\n');
+            }
+            assertTrue(seen.indexOf("precious-output") >= 0,
+                    "output must survive until drained; saw: " + seen);
+        }
+
+        @Test
+        void invalidPatternIsAnError_notAnException() throws Exception {
+            String id = startBash("echo x; sleep 5");
+            ToolResult r = tool.execute(
+                    input().put("process_id", id).put("pattern", "[unclosed"), context);
+            assertTrue(r.isError());
+            assertTrue(r.textContent().contains("Invalid pattern"));
+        }
+
+        @Test
         void patternFiltersOutput() throws Exception {
             String id = startBash("printf 'apple\\nbanana\\ncherry\\n'");
             var bp = manager.getProcess(id);

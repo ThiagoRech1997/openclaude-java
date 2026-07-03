@@ -51,9 +51,15 @@ public class GlobTool implements Tool {
         }
 
         String pathStr = input.path("path").asText("");
-        Path searchDir = pathStr.isBlank()
-                ? context.workingDirectory()
-                : Path.of(pathStr);
+        Path searchDir;
+        if (pathStr.isBlank()) {
+            searchDir = context.workingDirectory();
+        } else {
+            Path p = Path.of(pathStr);
+            // Relative paths resolve against the tool context (like every other
+            // file tool), not the JVM cwd — they differ for worktree sub-agents
+            searchDir = p.isAbsolute() ? p : context.workingDirectory().resolve(p);
+        }
 
         if (!Files.isDirectory(searchDir)) {
             return ToolResult.error("Directory does not exist: " + searchDir);

@@ -47,10 +47,15 @@ public class FileWriteTool implements Tool {
         }
         Path normalized = path.toAbsolutePath().normalize();
 
-        if (Files.exists(path) && !context.readFiles().contains(normalized)) {
-            return ToolResult.error(
-                    "File has not been read in this session. Use the Read tool first before "
-                            + "overwriting an existing file, to avoid unintended data loss: " + path);
+        if (Files.exists(path)) {
+            // Compare against the symlink-resolved path — lexical normalization
+            // alone lets "link/../file" pass the guard while the OS writes elsewhere
+            Path real = realPathOrNormalized(path);
+            if (!context.readFiles().contains(real) && !context.readFiles().contains(normalized)) {
+                return ToolResult.error(
+                        "File has not been read in this session. Use the Read tool first before "
+                                + "overwriting an existing file, to avoid unintended data loss: " + path);
+            }
         }
 
         try {
@@ -60,13 +65,21 @@ public class FileWriteTool implements Tool {
             }
 
             Files.writeString(path, content);
-            context.readFiles().add(normalized);
+            context.readFiles().add(realPathOrNormalized(path));
 
             long bytes = content.getBytes().length;
             return ToolResult.success("Successfully wrote " + bytes + " bytes to " + path);
 
         } catch (IOException e) {
             return ToolResult.error("Failed to write file: " + e.getMessage());
+        }
+    }
+
+    private static Path realPathOrNormalized(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return path.toAbsolutePath().normalize();
         }
     }
 }

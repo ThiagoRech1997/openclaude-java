@@ -93,6 +93,21 @@ class GlobToolTest {
     }
 
     @Test
+    void relativePathResolvesAgainstContextWorkingDirectory() throws IOException {
+        Path sub = Files.createDirectory(tempDir.resolve("sub"));
+        Files.writeString(sub.resolve("inside.txt"), "x");
+
+        // JVM cwd differs from tempDir — a relative path must still land in tempDir
+        ObjectNode in = input("*.txt");
+        in.put("path", "sub");
+
+        ToolResult r = tool.execute(in, ctx());
+
+        assertFalse(r.isError(), r.textContent());
+        assertTrue(r.textContent().contains("inside.txt"), r.textContent());
+    }
+
+    @Test
     void fewResultsProduceNoTruncationMessage() throws IOException {
         createFiles(5);
 

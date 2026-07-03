@@ -86,6 +86,32 @@ class FileReadToolTest {
     class TextRead {
 
         @Test
+        void negativeOffsetIsAnError_notAnException() throws IOException {
+            Path f = tempDir.resolve("neg.txt");
+            Files.writeString(f, "a\nb\n");
+
+            ObjectNode in = inputWithPath(f);
+            in.put("offset", -1);
+
+            ToolResult r = tool.execute(in, context());
+            assertTrue(r.isError());
+            assertTrue(r.textContent().contains("offset"));
+        }
+
+        @Test
+        void nonPositiveLimitIsAnError_notAnException() throws IOException {
+            Path f = tempDir.resolve("lim.txt");
+            Files.writeString(f, "a\nb\n");
+
+            ObjectNode in = inputWithPath(f);
+            in.put("limit", -5);
+
+            ToolResult r = tool.execute(in, context());
+            assertTrue(r.isError());
+            assertTrue(r.textContent().contains("limit"));
+        }
+
+        @Test
         void readsFileWithLineNumbers() throws IOException {
             Path f = tempDir.resolve("hello.txt");
             Files.writeString(f, "alpha\nbeta\ngamma\n");
