@@ -36,6 +36,7 @@ public class Repl {
     private final SessionManager session;
     private final BackgroundAgentManager backgroundManager;
     private final HookExecutor hooks;
+    private boolean saveWarned = false;
 
     public Repl(AppConfig config, LlmClient client, ToolRegistry toolRegistry,
                 Path workingDirectory, String systemPrompt,
@@ -49,6 +50,15 @@ public class Repl {
                 Path workingDirectory, String systemPrompt,
                 CommandRegistry commandRegistry, PermissionManager permissions,
                 BackgroundAgentManager backgroundManager, HookExecutor hooks) {
+        this(config, client, toolRegistry, workingDirectory, systemPrompt,
+                commandRegistry, permissions, backgroundManager, hooks, new SessionManager());
+    }
+
+    public Repl(AppConfig config, LlmClient client, ToolRegistry toolRegistry,
+                Path workingDirectory, String systemPrompt,
+                CommandRegistry commandRegistry, PermissionManager permissions,
+                BackgroundAgentManager backgroundManager, HookExecutor hooks,
+                SessionManager session) {
         this.config = config;
         this.client = client;
         this.toolRegistry = toolRegistry;
@@ -56,7 +66,7 @@ public class Repl {
         this.systemPrompt = systemPrompt;
         this.commandRegistry = commandRegistry;
         this.permissions = permissions;
-        this.session = new SessionManager();
+        this.session = session;
         this.backgroundManager = backgroundManager;
         this.hooks = hooks;
     }
@@ -70,6 +80,11 @@ public class Repl {
             TextInput input = new TextInput(screen.getTerminal(), promptString());
 
             display.showWelcome(config.provider(), config.model(), toolRegistry.size());
+            if (!session.getMessages().isEmpty()) {
+                screen.println(Ansi.DIM + "  Resumed session " + session.getSessionId()
+                        + " (" + session.getMessages().size() + " messages)" + Ansi.RESET);
+                screen.println();
+            }
 
             CommandContext cmdCtx = new CommandContext(
                     config, toolRegistry, permissions, session,
@@ -156,8 +171,21 @@ public class Repl {
         int priorCount = session.getMessages().size();
         List<Message> updated = engine.run(session.getMessages(), effectivePrompt);
         session.addMessages(updated.subList(priorCount, updated.size()));
+        persistSession(screen);
         screen.println();
         return true;
+    }
+
+    /** Auto-save after every turn so a crash or kill never loses the conversation. */
+    private void persistSession(TerminalScreen screen) {
+        try {
+            session.save(SessionManager.getSessionDirectory());
+        } catch (IOException e) {
+            if (!saveWarned) {
+                saveWarned = true;
+                screen.println(Ansi.DIM + "  (session auto-save failed: " + e.getMessage() + ")" + Ansi.RESET);
+            }
+        }
     }
 
     /**

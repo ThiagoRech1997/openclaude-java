@@ -1,5 +1,6 @@
 package dev.openclaude.core.session;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -7,12 +8,16 @@ import dev.openclaude.core.model.Message;
 import dev.openclaude.core.model.Usage;
 
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -31,6 +36,15 @@ public class SessionManager {
     public SessionManager() {
         this.sessionId = UUID.randomUUID().toString().substring(0, 8);
         this.startTime = Instant.now();
+    }
+
+    private SessionManager(String sessionId, Instant startTime, int turnCount,
+                           Usage totalUsage, List<Message> restoredMessages) {
+        this.sessionId = sessionId;
+        this.startTime = startTime;
+        this.turnCount = turnCount;
+        this.totalUsage = totalUsage;
+        this.messages.addAll(restoredMessages);
     }
 
     public String getSessionId() {
@@ -97,21 +111,83 @@ public class SessionManager {
     }
 
     /**
-     * Save session to disk for later resumption.
+     * Save the full session (metadata + conversation) to disk for later resumption.
+     * Written atomically (temp file + move) so a crash mid-write never corrupts
+     * the previous snapshot.
      */
     public void save(Path directory) throws IOException {
         Files.createDirectories(directory);
         Path sessionFile = directory.resolve("session-" + sessionId + ".json");
 
         ObjectNode root = MAPPER.createObjectNode();
+        root.put("version", 1);
         root.put("sessionId", sessionId);
         root.put("startTime", startTime.toString());
         root.put("turnCount", turnCount);
-        root.put("inputTokens", totalUsage.inputTokens());
-        root.put("outputTokens", totalUsage.outputTokens());
-        root.put("messageCount", messages.size());
+        root.set("usage", SessionCodec.usageToJson(totalUsage));
+        ArrayNode messagesArray = root.putArray("messages");
+        for (Message message : messages) {
+            messagesArray.add(SessionCodec.messageToJson(message));
+        }
 
-        Files.writeString(sessionFile, MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root));
+        Path tmp = sessionFile.resolveSibling(sessionFile.getFileName() + ".tmp");
+        Files.writeString(tmp, MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root));
+        try {
+            Files.move(tmp, sessionFile,
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tmp, sessionFile, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * Load a previously saved session, restoring the conversation, usage, and
+     * turn counters. Subsequent {@link #save} calls overwrite the same file.
+     */
+    public static SessionManager load(Path sessionFile) throws IOException {
+        JsonNode root = MAPPER.readTree(Files.readString(sessionFile));
+        String id = root.path("sessionId").asText("");
+        if (id.isBlank()) {
+            throw new IOException("Invalid session file (missing sessionId): " + sessionFile);
+        }
+
+        Instant start;
+        try {
+            start = Instant.parse(root.path("startTime").asText(""));
+        } catch (Exception e) {
+            start = Instant.now();
+        }
+
+        List<Message> restored = new ArrayList<>();
+        for (JsonNode m : root.path("messages")) {
+            restored.add(SessionCodec.messageFromJson(m));
+        }
+
+        return new SessionManager(id, start, root.path("turnCount").asInt(0),
+                SessionCodec.usageFromJson(root.get("usage")), restored);
+    }
+
+    /**
+     * Most recently modified session file in the directory, if any.
+     */
+    public static Optional<Path> latestSessionFile(Path directory) throws IOException {
+        if (!Files.isDirectory(directory)) {
+            return Optional.empty();
+        }
+        try (var files = Files.list(directory)) {
+            return files
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return name.startsWith("session-") && name.endsWith(".json");
+                    })
+                    .max(Comparator.comparingLong(p -> {
+                        try {
+                            return Files.getLastModifiedTime(p).toMillis();
+                        } catch (IOException e) {
+                            return 0L;
+                        }
+                    }));
+        }
     }
 
     /**

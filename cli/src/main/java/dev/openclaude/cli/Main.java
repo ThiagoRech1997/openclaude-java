@@ -41,6 +41,7 @@ import dev.openclaude.commands.CommandRegistry;
 import dev.openclaude.commands.CommandRegistryFactory;
 import dev.openclaude.core.permissions.PermissionManager;
 import dev.openclaude.core.permissions.PermissionMode;
+import dev.openclaude.core.session.SessionManager;
 import dev.openclaude.tui.Ansi;
 import dev.openclaude.tui.Repl;
 import picocli.CommandLine;
@@ -86,6 +87,13 @@ public class Main implements Callable<Integer> {
     @Option(names = {"--dangerously-skip-permissions"},
             description = "Auto-approve every tool call for the session. No prompt, no denial. Use with care.")
     private boolean dangerouslySkipPermissions;
+
+    @Option(names = {"-c", "--continue"}, description = "Resume the most recent session (REPL mode).")
+    private boolean continueSession;
+
+    @Option(names = {"--resume"}, paramLabel = "<sessionId>",
+            description = "Resume a saved session by ID (REPL mode).")
+    private String resumeSessionId;
 
     private BackgroundAgentManager backgroundManager;
     private BackgroundProcessManager processManager;
@@ -142,9 +150,10 @@ public class Main implements Callable<Integer> {
             ToolRegistry tools = createToolRegistry(client, config, permissions, hooks);
 
             CommandRegistry commands = new CommandRegistryFactory().create(cwd);
+            SessionManager session = resolveSession();
 
             Repl repl = new Repl(config, client, tools, cwd, effectiveSystemPrompt, commands, permissions,
-                    backgroundManager, hooks);
+                    backgroundManager, hooks, session);
             repl.start();
             backgroundManager.shutdown();
             processManager.shutdown();
@@ -183,6 +192,26 @@ public class Main implements Callable<Integer> {
         }
 
         return 0;
+    }
+
+    private SessionManager resolveSession() {
+        Path dir = SessionManager.getSessionDirectory();
+        try {
+            if (resumeSessionId != null && !resumeSessionId.isBlank()) {
+                return SessionManager.load(dir.resolve("session-" + resumeSessionId + ".json"));
+            }
+            if (continueSession) {
+                var latest = SessionManager.latestSessionFile(dir);
+                if (latest.isPresent()) {
+                    return SessionManager.load(latest.get());
+                }
+                System.out.println(Ansi.DIM + "No previous session found — starting a new one." + Ansi.RESET);
+            }
+        } catch (Exception e) {
+            System.err.println(Ansi.YELLOW + "Failed to load session (" + e.getMessage()
+                    + ") — starting fresh." + Ansi.RESET);
+        }
+        return new SessionManager();
     }
 
     private PermissionManager resolvePermissions(boolean interactive) {
