@@ -17,6 +17,8 @@ import dev.openclaude.tui.widget.TextInput;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Interactive REPL (Read-Eval-Print Loop) for the coding agent.
@@ -75,16 +77,20 @@ public class Repl {
 
             ReplPermissionHandler permissionHandler = new ReplPermissionHandler(screen, permissions);
 
-            // One engine for the whole session so per-session tool state
-            // (e.g. files read, required by FileWriteTool) survives across turns.
-            QueryEngine engine = new QueryEngine(
-                    client, toolRegistry, config.model(), systemPrompt,
+            // Factory so custom commands with allowed-tools can run one turn on a
+            // restricted registry without touching the session engine.
+            Function<ToolRegistry, QueryEngine> engineFactory = registry -> new QueryEngine(
+                    client, registry, config.model(), systemPrompt,
                     config.maxTokens(), workingDirectory, event -> {
                 display.handleEvent(event);
                 if (event instanceof dev.openclaude.engine.EngineEvent.Done done) {
                     session.addUsage(done.totalUsage());
                 }
             }, backgroundManager, hooks, permissions, permissionHandler);
+
+            // One engine for the whole session so per-session tool state
+            // (e.g. files read, required by FileWriteTool) survives across turns.
+            QueryEngine engine = engineFactory.apply(toolRegistry);
 
             while (true) {
                 String userInput = input.readLineSafe();
@@ -105,7 +111,7 @@ public class Repl {
                     if (trimmed.startsWith("/")) {
                         CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
                         if (result != null) {
-                            if (!handleCommandResult(result, screen, engine)) break;
+                            if (!handleCommandResult(result, screen, engine, engineFactory)) break;
                             continue;
                         }
                     }
@@ -160,9 +166,16 @@ public class Repl {
      * shut managers down.
      */
     private boolean handleCommandResult(CommandResult result, TerminalScreen screen,
-                                        QueryEngine engine) {
+                                        QueryEngine engine,
+                                        Function<ToolRegistry, QueryEngine> engineFactory) {
         if (result.action() == CommandResult.Action.SUBMIT_PROMPT) {
-            return runAgentTurn(result.output(), engine, screen);
+            QueryEngine turnEngine = engine;
+            if (result.allowedTools() != null && !result.allowedTools().isEmpty()) {
+                Set<String> allowed = Set.copyOf(result.allowedTools());
+                turnEngine = engineFactory.apply(
+                        toolRegistry.filteredCopy(t -> allowed.contains(t.name())));
+            }
+            return runAgentTurn(result.output(), turnEngine, screen);
         }
 
         if (result.output() != null) {

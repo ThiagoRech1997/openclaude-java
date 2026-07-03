@@ -17,16 +17,43 @@ public final class MarkdownRenderer {
     public static String render(String text, int terminalWidth) {
         if (text == null || text.isEmpty()) return "";
 
+        Stream stream = new Stream(terminalWidth);
         StringBuilder result = new StringBuilder();
-        String[] lines = text.split("\n", -1);
-        boolean inCodeBlock = false;
-        String codeLang = "";
+        for (String line : text.split("\n", -1)) {
+            result.append(stream.renderLine(line));
+        }
+        return result.toString();
+    }
 
-        for (String line : lines) {
+    /**
+     * Stateful line-at-a-time renderer for streaming output: keeps the code-fence
+     * state across calls so ``` blocks render correctly while text arrives.
+     */
+    public static final class Stream {
+
+        private final int terminalWidth;
+        private boolean inCodeBlock = false;
+
+        public Stream(int terminalWidth) {
+            this.terminalWidth = terminalWidth;
+        }
+
+        /** Forget fence state — call between messages. */
+        public void reset() {
+            inCodeBlock = false;
+        }
+
+        /**
+         * Render one line of markdown (no trailing newline in the input);
+         * the returned string ends with a newline.
+         */
+        public String renderLine(String line) {
+            StringBuilder result = new StringBuilder();
+
             if (line.startsWith("```")) {
                 inCodeBlock = !inCodeBlock;
                 if (inCodeBlock) {
-                    codeLang = line.substring(3).trim();
+                    String codeLang = line.substring(3).trim();
                     result.append(Ansi.DIM).append("┌─");
                     if (!codeLang.isEmpty()) {
                         result.append(" ").append(codeLang).append(" ");
@@ -39,14 +66,14 @@ public final class MarkdownRenderer {
                     result.append("─".repeat(Math.max(0, terminalWidth - 2)));
                     result.append(Ansi.RESET).append('\n');
                 }
-                continue;
+                return result.toString();
             }
 
             if (inCodeBlock) {
                 result.append(Ansi.DIM).append("│ ").append(Ansi.RESET);
                 result.append(line);
                 result.append('\n');
-                continue;
+                return result.toString();
             }
 
             // Headers
@@ -75,9 +102,8 @@ public final class MarkdownRenderer {
             } else {
                 result.append(renderInline(line)).append('\n');
             }
+            return result.toString();
         }
-
-        return result.toString();
     }
 
     /**

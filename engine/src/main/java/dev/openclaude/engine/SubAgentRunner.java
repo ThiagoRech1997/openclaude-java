@@ -100,18 +100,12 @@ public class SubAgentRunner implements AgentRunner {
 
             List<Message> messages = engine.run(request.prompt());
 
-            // Extract the final assistant text
-            if (resultText.length() == 0) {
-                for (int i = messages.size() - 1; i >= 0; i--) {
-                    if (messages.get(i) instanceof Message.AssistantMessage am) {
-                        for (ContentBlock block : am.content()) {
-                            if (block instanceof ContentBlock.Text t) {
-                                resultText.append(t.text());
-                            }
-                        }
-                        break;
-                    }
-                }
+            // Prefer the FINAL assistant message — the streamed accumulation
+            // concatenates every intermediate turn's commentary
+            String finalText = lastAssistantText(messages);
+            if (!finalText.isBlank()) {
+                resultText.setLength(0);
+                resultText.append(finalText);
             }
         } catch (RuntimeException e) {
             runFailed = true;
@@ -127,6 +121,21 @@ public class SubAgentRunner implements AgentRunner {
         }
 
         return resultText.length() > 0 ? resultText.toString() : "(Agent completed with no text output)";
+    }
+
+    private static String lastAssistantText(List<Message> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i) instanceof Message.AssistantMessage am) {
+                StringBuilder sb = new StringBuilder();
+                for (ContentBlock block : am.content()) {
+                    if (block instanceof ContentBlock.Text t) {
+                        sb.append(t.text());
+                    }
+                }
+                return sb.toString();
+            }
+        }
+        return "";
     }
 
     private ToolRegistry resolveToolRegistry(SubAgentDefinition def) {

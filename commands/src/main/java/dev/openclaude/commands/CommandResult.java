@@ -1,12 +1,23 @@
 package dev.openclaude.commands;
 
+import java.util.List;
+
 /**
  * Result from a command execution.
+ *
+ * <p>{@code allowedTools} only applies to {@link Action#SUBMIT_PROMPT}: when non-null
+ * and non-empty, the submitted turn runs with the tool registry restricted to those
+ * tool names (custom commands' {@code allowed-tools} frontmatter).
  */
 public record CommandResult(
         String output,
-        Action action
+        Action action,
+        List<String> allowedTools
 ) {
+    public CommandResult(String output, Action action) {
+        this(output, action, null);
+    }
+
     public enum Action {
         /** Just display output, continue REPL. */
         CONTINUE,
@@ -38,5 +49,9 @@ public record CommandResult(
 
     public static CommandResult submitPrompt(String prompt) {
         return new CommandResult(prompt, Action.SUBMIT_PROMPT);
+    }
+
+    public static CommandResult submitPrompt(String prompt, List<String> allowedTools) {
+        return new CommandResult(prompt, Action.SUBMIT_PROMPT, allowedTools);
     }
 }

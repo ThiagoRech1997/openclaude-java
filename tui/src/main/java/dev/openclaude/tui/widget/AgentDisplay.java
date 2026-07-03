@@ -15,11 +15,15 @@ public class AgentDisplay {
     private final TerminalScreen screen;
     private final Spinner spinner;
     private final StringBuilder currentResponse = new StringBuilder();
+    /** Buffers streamed text until a full line arrives for markdown rendering. */
+    private final StringBuilder lineBuffer = new StringBuilder();
+    private final MarkdownRenderer.Stream markdown;
     private boolean isStreaming = false;
 
     public AgentDisplay(TerminalScreen screen) {
         this.screen = screen;
         this.spinner = new Spinner(screen.getTerminal().writer());
+        this.markdown = new MarkdownRenderer.Stream(screen.getWidth());
     }
 
     /**
@@ -45,7 +49,14 @@ public class AgentDisplay {
                 isStreaming = true;
                 spinner.stop();
             }
-            screen.print(td.text());
+            // Line-buffered so each complete line goes through the markdown renderer
+            lineBuffer.append(td.text());
+            int newline;
+            while ((newline = lineBuffer.indexOf("\n")) >= 0) {
+                String line = lineBuffer.substring(0, newline);
+                lineBuffer.delete(0, newline + 1);
+                screen.print(markdown.renderLine(line));
+            }
             currentResponse.append(td.text());
         } else if (event instanceof StreamEvent.ThinkingDelta th) {
             if (!isStreaming) {
@@ -56,16 +67,27 @@ public class AgentDisplay {
         } else if (event instanceof StreamEvent.MessageStart ms) {
             spinner.start("Thinking...");
         } else if (event instanceof StreamEvent.ToolUseStart tus) {
+            flushPartialLine();
             spinner.stop();
             isStreaming = false;
         } else if (event instanceof StreamEvent.Error err) {
+            flushPartialLine();
             spinner.stop();
             screen.println();
             screen.println(Ansi.RED + "✗ Stream error: " + err.message() + Ansi.RESET);
         }
     }
 
+    private void flushPartialLine() {
+        if (lineBuffer.length() > 0) {
+            screen.print(markdown.renderLine(lineBuffer.toString()));
+            lineBuffer.setLength(0);
+        }
+        markdown.reset();
+    }
+
     private void handleToolStart(EngineEvent.ToolExecutionStart tes) {
+        flushPartialLine();
         spinner.stop();
         if (isStreaming) {
             screen.println();
@@ -114,6 +136,7 @@ public class AgentDisplay {
     }
 
     private void handleDone(EngineEvent.Done done) {
+        flushPartialLine();
         spinner.stop();
         if (isStreaming) {
             screen.println();
@@ -132,6 +155,7 @@ public class AgentDisplay {
     }
 
     private void handleError(EngineEvent.Error err) {
+        flushPartialLine();
         spinner.stop();
         screen.println();
         screen.println(Ansi.RED + "  ✗ Error: " + err.message() + Ansi.RESET);

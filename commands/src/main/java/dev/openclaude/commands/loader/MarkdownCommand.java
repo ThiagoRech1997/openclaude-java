@@ -44,6 +44,6 @@ public record MarkdownCommand(
     public CommandResult execute(String args, CommandContext context) {
         String safeArgs = args == null ? "" : args;
         String expanded = body.replace("$ARGUMENTS", safeArgs);
-        return CommandResult.submitPrompt(expanded);
+        return CommandResult.submitPrompt(expanded, allowedTools);
     }
 }

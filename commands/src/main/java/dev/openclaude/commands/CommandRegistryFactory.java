@@ -45,9 +45,13 @@ public final class CommandRegistryFactory {
         // Snapshot built-in names before loading customs. The collision check must only reject
         // built-ins — otherwise a project-local .md that shadows a user-global one would be
         // treated as a collision and skipped (losing the intended project > user precedence).
+        // Aliases count too: a repo-provided q.md must not hijack /q (quit).
         Set<String> builtins = new HashSet<>();
         for (Command c : registry.allCommands()) {
             builtins.add(c.name().toLowerCase());
+            for (String alias : c.aliases()) {
+                builtins.add(alias.toLowerCase());
+            }
         }
 
         for (MarkdownCommand cmd : new CustomCommandLoader().load(cwd)) {
