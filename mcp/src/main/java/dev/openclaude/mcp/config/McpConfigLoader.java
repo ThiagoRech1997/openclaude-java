@@ -72,9 +72,11 @@ public final class McpConfigLoader {
                 String name = fieldNames.next();
                 JsonNode serverNode = servers.get(name);
 
-                String type = serverNode.path("type").asText("stdio");
                 String command = serverNode.path("command").asText(null);
                 String url = serverNode.path("url").asText(null);
+                // No explicit type: a url-only config is a remote SSE/HTTP server
+                String defaultType = url != null && command == null ? "sse" : "stdio";
+                String type = serverNode.path("type").asText(defaultType);
 
                 // Parse args
                 List<String> args = new ArrayList<>();
@@ -107,11 +109,16 @@ public final class McpConfigLoader {
                     }
                 }
 
-                // Substitute env vars in command and args
+                // Substitute env vars in command, args, url, and header values
+                // (bearer tokens typically live in the environment)
                 if (command != null) {
                     command = substituteEnvVars(command);
                 }
                 args = args.stream().map(McpConfigLoader::substituteEnvVars).toList();
+                if (url != null) {
+                    url = substituteEnvVars(url);
+                }
+                headers.replaceAll((key, value) -> substituteEnvVars(value));
 
                 result.put(name, new McpServerConfig(type, command, args, env, url, headers));
             }

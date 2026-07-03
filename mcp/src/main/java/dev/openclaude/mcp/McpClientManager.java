@@ -216,9 +216,11 @@ public class McpClientManager implements AutoCloseable {
                     config.env(),
                     null
             );
+            case "sse", "http" -> new dev.openclaude.mcp.transport.HttpSseTransport(
+                    config.url(), config.headers());
             default -> throw new McpException(
                     "Unsupported MCP transport type: " + config.type()
-                    + ". Currently supported: stdio");
+                    + ". Currently supported: stdio, sse, http");
         };
     }
 

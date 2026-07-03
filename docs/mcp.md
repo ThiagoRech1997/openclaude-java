@@ -44,16 +44,35 @@ Same format. Project-local entries override user-level entries with the same nam
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | Transport type: `"stdio"` (only supported currently) |
-| `command` | string | Command to spawn the server process |
-| `args` | string[] | Command arguments |
-| `env` | object | Extra environment variables for the process |
-| `url` | string | Server URL (for future remote transport support) |
-| `headers` | object | HTTP headers (for future remote transport support) |
+| `type` | string | Transport type: `"stdio"`, `"sse"`, or `"http"`. Optional — a config with only `url` defaults to `"sse"`, otherwise `"stdio"` |
+| `command` | string | Command to spawn the server process (stdio) |
+| `args` | string[] | Command arguments (stdio) |
+| `env` | object | Extra environment variables for the process (stdio) |
+| `url` | string | Server URL (sse/http remote servers) |
+| `headers` | object | HTTP headers sent on every request, e.g. `{"Authorization": "Bearer ${MY_TOKEN}"}` |
+
+### Remote Servers (HTTP/SSE)
+
+```json
+{
+  "mcpServers": {
+    "internal-api": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${INTERNAL_MCP_TOKEN}"}
+    }
+  }
+}
+```
+
+The client implements the MCP 2024-11-05 HTTP+SSE flow (GET opens the SSE stream, the
+server announces the POST endpoint via an `endpoint` event, responses arrive as `message`
+events) and also interoperates with "streamable HTTP" servers that answer each POST
+directly with JSON. The SSE channel reconnects automatically on stream loss (up to 3
+attempts).
 
 ### Environment Variable Substitution
 
-Command strings and arguments support `${ENV_VAR}` substitution:
+Command strings, arguments, URLs, and header values support `${ENV_VAR}` substitution:
 
 ```json
 {
