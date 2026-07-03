@@ -288,6 +288,9 @@ public class Main implements Callable<Integer> {
         System.out.println(Ansi.DIM + "  Connecting to " + mcpConfigs.size() + " MCP server(s)..." + Ansi.RESET);
 
         McpClientManager mcpManager = new McpClientManager();
+        // Covers every exit path (including /exit's System.exit) — without it
+        // the MCP server subprocesses outlive the CLI
+        Runtime.getRuntime().addShutdownHook(new Thread(mcpManager::close, "mcp-shutdown"));
         mcpManager.connectAll(mcpConfigs);
 
         for (var server : mcpManager.allServers()) {

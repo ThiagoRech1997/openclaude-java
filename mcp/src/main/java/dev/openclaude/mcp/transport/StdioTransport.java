@@ -81,6 +81,13 @@ public class StdioTransport implements McpTransportClient {
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         pendingRequests.put(id, future);
 
+        // The reader may have died between the check above and the put — without
+        // this re-check the future would hang until the full timeout
+        if (!connected.get() && !future.isDone()) {
+            pendingRequests.remove(id);
+            throw new McpException("Transport is not connected");
+        }
+
         try {
             // Build JSON-RPC request
             ObjectNode request = MAPPER.createObjectNode();
@@ -197,10 +204,17 @@ public class StdioTransport implements McpTransportClient {
                     // Skip malformed messages
                 }
             }
-        } catch (IOException e) {
-            if (connected.get()) {
-                connected.set(false);
+        } catch (IOException ignored) {
+            // Treated the same as EOF below
+        } finally {
+            // Server died or closed stdout: fail every in-flight request now
+            // instead of letting each one block for its full timeout
+            connected.set(false);
+            for (var entry : pendingRequests.entrySet()) {
+                entry.getValue().completeExceptionally(
+                        new McpException("MCP server closed the connection"));
             }
+            pendingRequests.clear();
         }
     }
 

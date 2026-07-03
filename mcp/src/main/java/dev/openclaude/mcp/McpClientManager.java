@@ -27,6 +27,11 @@ public class McpClientManager implements AutoCloseable {
 
     private final Map<String, McpServer> servers = new ConcurrentHashMap<>();
 
+    /** Qualified tool name → (server, original tool name), so tools/call always
+     *  sends the server's own name even after normalization for display. */
+    private record ToolBinding(String serverName, String toolName) {}
+    private final Map<String, ToolBinding> toolBindings = new ConcurrentHashMap<>();
+
     /**
      * Connect to all configured MCP servers.
      *
@@ -52,8 +57,9 @@ public class McpClientManager implements AutoCloseable {
      * Connect to a single MCP server.
      */
     public McpServer connect(String name, McpServerConfig config) {
+        McpTransportClient transport = null;
         try {
-            McpTransportClient transport = createTransport(name, config);
+            transport = createTransport(name, config);
 
             // Initialize the MCP protocol
             McpServer.ServerInfo serverInfo = initialize(transport);
@@ -66,6 +72,12 @@ public class McpClientManager implements AutoCloseable {
             return connected;
 
         } catch (Exception e) {
+            // The subprocess was already spawned — kill it or it lives on as a zombie
+            if (transport != null) {
+                try {
+                    transport.close();
+                } catch (Exception ignored) {}
+            }
             McpServer.Failed failed = new McpServer.Failed(name, e.getMessage());
             servers.put(name, failed);
             return failed;
@@ -101,7 +113,16 @@ public class McpClientManager implements AutoCloseable {
         for (McpServer.Connected server : connectedServers()) {
             for (McpServer.McpTool tool : server.tools()) {
                 String qualifiedName = "mcp__" + normalizeName(server.name()) + "__" + normalizeName(tool.name());
-                tools.add(new McpServer.McpTool(qualifiedName, tool.description(), tool.inputSchema()));
+                ToolBinding binding = new ToolBinding(server.name(), tool.name());
+
+                // Distinct original names can collide after normalization
+                String unique = qualifiedName;
+                int suffix = 2;
+                while (toolBindings.containsKey(unique) && !toolBindings.get(unique).equals(binding)) {
+                    unique = qualifiedName + "_" + suffix++;
+                }
+                toolBindings.put(unique, binding);
+                tools.add(new McpServer.McpTool(unique, tool.description(), tool.inputSchema()));
             }
         }
         return tools;
@@ -115,14 +136,23 @@ public class McpClientManager implements AutoCloseable {
      * @return the tool result content
      */
     public String callTool(String qualifiedToolName, JsonNode arguments) throws McpException {
-        // Parse qualified name: mcp__<server>__<tool>
-        String[] parts = qualifiedToolName.split("__", 3);
-        if (parts.length != 3 || !"mcp".equals(parts[0])) {
-            throw new McpException("Invalid MCP tool name: " + qualifiedToolName);
-        }
+        String serverName;
+        String toolName;
 
-        String serverName = parts[1];
-        String toolName = parts[2];
+        ToolBinding binding = toolBindings.get(qualifiedToolName);
+        if (binding != null) {
+            serverName = binding.serverName();
+            toolName = binding.toolName();
+        } else {
+            // Fallback: parse mcp__<server>__<tool> — only safe when the
+            // original names contain no characters altered by normalization
+            String[] parts = qualifiedToolName.split("__", 3);
+            if (parts.length != 3 || !"mcp".equals(parts[0])) {
+                throw new McpException("Invalid MCP tool name: " + qualifiedToolName);
+            }
+            serverName = parts[1];
+            toolName = parts[2];
+        }
 
         // Find the connected server
         McpServer.Connected server = findServer(serverName);
@@ -225,35 +255,57 @@ public class McpClientManager implements AutoCloseable {
     /**
      * List tools from a connected server.
      */
-    private List<McpServer.McpTool> listTools(McpTransportClient transport) throws McpException {
-        JsonNode result = transport.request("tools/list", MAPPER.createObjectNode(), DEFAULT_TIMEOUT_MS);
-
+    List<McpServer.McpTool> listTools(McpTransportClient transport) throws McpException {
         List<McpServer.McpTool> tools = new ArrayList<>();
-        JsonNode toolsArray = result.get("tools");
-        if (toolsArray != null && toolsArray.isArray()) {
-            for (JsonNode tool : toolsArray) {
-                String name = tool.path("name").asText();
-                String description = tool.path("description").asText("");
-                JsonNode inputSchema = tool.get("inputSchema");
-                if (inputSchema == null) {
-                    inputSchema = MAPPER.createObjectNode().put("type", "object");
-                }
-                tools.add(new McpServer.McpTool(name, description, inputSchema));
+        String cursor = null;
+
+        do {
+            ObjectNode params = MAPPER.createObjectNode();
+            if (cursor != null) {
+                params.put("cursor", cursor);
             }
-        }
+            JsonNode result = transport.request("tools/list", params, DEFAULT_TIMEOUT_MS);
+
+            JsonNode toolsArray = result.get("tools");
+            if (toolsArray != null && toolsArray.isArray()) {
+                for (JsonNode tool : toolsArray) {
+                    String name = tool.path("name").asText();
+                    String description = tool.path("description").asText("");
+                    JsonNode inputSchema = tool.get("inputSchema");
+                    if (inputSchema == null) {
+                        inputSchema = MAPPER.createObjectNode().put("type", "object");
+                    }
+                    tools.add(new McpServer.McpTool(name, description, inputSchema));
+                }
+            }
+
+            JsonNode next = result.get("nextCursor");
+            cursor = next != null && !next.isNull() && !next.asText().isBlank()
+                    ? next.asText() : null;
+        } while (cursor != null);
 
         return tools;
     }
 
-    private McpServer.Connected findServer(String normalizedName) {
+    private McpServer.Connected findServer(String name) {
+        // Exact match first (binding path passes the original name)
+        if (servers.get(name) instanceof McpServer.Connected c) {
+            return c;
+        }
+        // Fallback for parsed names, which arrive normalized
         for (McpServer server : servers.values()) {
             if (server instanceof McpServer.Connected c) {
-                if (normalizeName(c.name()).equals(normalizedName)) {
+                if (normalizeName(c.name()).equals(name)) {
                     return c;
                 }
             }
         }
         return null;
+    }
+
+    // Seam for tests: inject a server state without spawning a transport
+    void register(McpServer server) {
+        servers.put(server.name(), server);
     }
 
     /**
