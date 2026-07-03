@@ -79,8 +79,10 @@ public class WebFetchTool implements Tool {
         if (url.isEmpty()) {
             return ToolResult.error("URL is required.");
         }
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            // Auto-upgrade to https if no scheme provided
+        if (url.startsWith("http://")) {
+            // Documented contract: plain HTTP is auto-upgraded to HTTPS
+            url = "https://" + url.substring("http://".length());
+        } else if (!url.startsWith("https://")) {
             if (!url.contains("://")) {
                 url = "https://" + url;
             } else {
@@ -115,6 +117,11 @@ public class WebFetchTool implements Tool {
 
             int statusCode = response.statusCode();
             if (statusCode < 200 || statusCode >= 300) {
+                // Close the unread body or the connection lingers until GC
+                try (InputStream ignored = response.body()) {
+                    // nothing to read
+                } catch (IOException ignored) {
+                }
                 return ToolResult.error("HTTP " + statusCode + " for " + url);
             }
 

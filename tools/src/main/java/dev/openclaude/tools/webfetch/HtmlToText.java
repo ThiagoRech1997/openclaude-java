@@ -122,7 +122,6 @@ public final class HtmlToText {
     }
 
     private static String decodeEntities(String text) {
-        text = text.replace("&amp;", "&");
         text = text.replace("&lt;", "<");
         text = text.replace("&gt;", ">");
         text = text.replace("&quot;", "\"");
@@ -133,8 +132,9 @@ public final class HtmlToText {
         Matcher numMatcher = NUMERIC_ENTITY.matcher(text);
         StringBuilder sb = new StringBuilder();
         while (numMatcher.find()) {
-            int codePoint = Integer.parseInt(numMatcher.group(1));
-            numMatcher.appendReplacement(sb, Matcher.quoteReplacement(String.valueOf((char) codePoint)));
+            numMatcher.appendReplacement(sb,
+                    Matcher.quoteReplacement(codePointToString(
+                            Integer.parseInt(numMatcher.group(1)), numMatcher.group(0))));
         }
         numMatcher.appendTail(sb);
         text = sb.toString();
@@ -143,11 +143,24 @@ public final class HtmlToText {
         Matcher hexMatcher = HEX_ENTITY.matcher(text);
         sb = new StringBuilder();
         while (hexMatcher.find()) {
-            int codePoint = Integer.parseInt(hexMatcher.group(1), 16);
-            hexMatcher.appendReplacement(sb, Matcher.quoteReplacement(String.valueOf((char) codePoint)));
+            hexMatcher.appendReplacement(sb,
+                    Matcher.quoteReplacement(codePointToString(
+                            Integer.parseInt(hexMatcher.group(1), 16), hexMatcher.group(0))));
         }
         hexMatcher.appendTail(sb);
+        text = sb.toString();
 
-        return sb.toString();
+        // &amp; must be decoded LAST: "&amp;lt;" means the literal text "&lt;",
+        // and decoding it first would double-decode into "<"
+        return text.replace("&amp;", "&");
+    }
+
+    /** Full code-point conversion — a (char) cast mangles emoji and other supplementary chars. */
+    private static String codePointToString(int codePoint, String original) {
+        try {
+            return new String(Character.toChars(codePoint));
+        } catch (IllegalArgumentException e) {
+            return original;
+        }
     }
 }

@@ -116,7 +116,10 @@ public class FileReadTool implements Tool {
         }
 
         try {
-            List<String> allLines = Files.readAllLines(path);
+            // Lossy UTF-8 decode: Files.readAllLines is strict and fails the whole
+            // read on the first non-UTF-8 byte (Latin-1 files, stray binary)
+            List<String> allLines = new String(Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8)
+                    .lines().toList();
             int totalLines = allLines.size();
 
             if (offset >= totalLines && totalLines > 0) {

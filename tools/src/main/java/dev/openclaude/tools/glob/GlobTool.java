@@ -16,6 +16,8 @@ import java.util.List;
 public class GlobTool implements Tool {
 
     private static final int DEFAULT_LIMIT = 500;
+    /** Safety bound on collected matches so a degenerate pattern cannot blow the heap. */
+    private static final int HARD_SCAN_CAP = 100_000;
 
     private static final JsonNode SCHEMA = SchemaBuilder.object()
             .stringProp("pattern", "The glob pattern to match files (e.g., '**/*.java').", true)
@@ -84,7 +86,9 @@ public class GlobTool implements Tool {
                     if (matcher.matches(relative)) {
                         matches.add(file);
                     }
-                    if (matches.size() >= limit) {
+                    // No early exit at `limit`: truncation must keep the NEWEST
+                    // N after sorting, not the first N in walk order
+                    if (matches.size() >= HARD_SCAN_CAP) {
                         return FileVisitResult.TERMINATE;
                     }
                     return FileVisitResult.CONTINUE;
@@ -119,12 +123,15 @@ public class GlobTool implements Tool {
                 return ToolResult.success("No files found matching pattern: " + pattern);
             }
 
+            boolean truncated = matches.size() > limit;
+            List<Path> shown = truncated ? matches.subList(0, limit) : matches;
+
             StringBuilder sb = new StringBuilder();
-            sb.append("Found ").append(matches.size()).append(" file(s):\n");
-            for (Path match : matches) {
+            sb.append("Found ").append(shown.size()).append(" file(s):\n");
+            for (Path match : shown) {
                 sb.append(match).append('\n');
             }
-            if (matches.size() >= limit && limit != Integer.MAX_VALUE) {
+            if (truncated) {
                 sb.append("\n(results truncated at ").append(limit).append(")\n");
             }
 
