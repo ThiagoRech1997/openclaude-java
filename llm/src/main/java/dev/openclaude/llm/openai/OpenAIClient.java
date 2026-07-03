@@ -104,6 +104,9 @@ public class OpenAIClient implements LlmClient {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", request.model());
         root.put("max_tokens", request.maxTokens());
+        if (request.temperature() != null) {
+            root.put("temperature", request.temperature());
+        }
         root.put("stream", true);
         // Without this OpenAI never sends usage in a streamed response
         root.putObject("stream_options").put("include_usage", true);

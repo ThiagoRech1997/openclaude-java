@@ -90,6 +90,9 @@ public class OllamaClient implements LlmClient {
         // Options
         ObjectNode options = root.putObject("options");
         options.put("num_predict", request.maxTokens());
+        if (request.temperature() != null) {
+            options.put("temperature", request.temperature());
+        }
 
         // Messages
         ArrayNode messagesArray = root.putArray("messages");

@@ -81,6 +81,9 @@ public class AnthropicClient implements LlmClient {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", request.model());
         root.put("max_tokens", request.maxTokens());
+        if (request.temperature() != null) {
+            root.put("temperature", request.temperature());
+        }
         root.put("stream", true);
 
         if (request.systemPrompt() != null && !request.systemPrompt().isBlank()) {

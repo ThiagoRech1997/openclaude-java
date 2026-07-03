@@ -34,6 +34,10 @@ public record AppConfig(
         // Check for explicit Ollama
         String ollamaUrl = env("OLLAMA_BASE_URL", env("OLLAMA_HOST", ""));
         if (!ollamaUrl.isBlank()) {
+            // Ollama convention allows OLLAMA_HOST=0.0.0.0:11434 (no scheme)
+            if (!ollamaUrl.contains("://")) {
+                ollamaUrl = "http://" + ollamaUrl;
+            }
             String model = env("OLLAMA_MODEL", env("OPENCLAUDE_MODEL", DEFAULT_MODEL_OLLAMA));
             return new AppConfig("", model, ollamaUrl, "ollama",
                     intEnv("OPENCLAUDE_MAX_TOKENS", DEFAULT_MAX_TOKENS));

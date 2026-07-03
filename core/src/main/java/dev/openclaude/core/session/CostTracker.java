@@ -76,11 +76,17 @@ public final class CostTracker {
         if (model == null) return new double[]{3.0, 15.0, 0.30}; // default sonnet
 
         String lower = model.toLowerCase();
+        // Longest key wins — "gpt-4o-mini" contains both "gpt-4o" and
+        // "gpt-4o-mini", and Map iteration order is unspecified
+        double[] best = null;
+        int bestLength = -1;
         for (var entry : PRICING.entrySet()) {
-            if (lower.contains(entry.getKey())) {
-                return entry.getValue();
+            if (lower.contains(entry.getKey()) && entry.getKey().length() > bestLength) {
+                best = entry.getValue();
+                bestLength = entry.getKey().length();
             }
         }
+        if (best != null) return best;
         // Default: Claude Sonnet pricing
         return new double[]{3.0, 15.0, 0.30};
     }
