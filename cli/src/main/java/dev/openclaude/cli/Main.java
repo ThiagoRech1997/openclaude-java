@@ -259,6 +259,8 @@ public class Main implements Callable<Integer> {
             System.out.println(Ansi.DIM + "  [Background agent completed: " + bg.description() + "]" + Ansi.RESET);
         } else if (event instanceof EngineEvent.Error err) {
             System.err.println(Ansi.RED + "Error: " + err.message() + Ansi.RESET);
+        } else if (event instanceof EngineEvent.Aborted) {
+            System.err.println(Ansi.YELLOW + "Interrupted." + Ansi.RESET);
         }
     }
 

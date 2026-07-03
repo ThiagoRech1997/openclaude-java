@@ -40,7 +40,21 @@ public class AgentDisplay {
             handleDone(done);
         } else if (event instanceof EngineEvent.Error err) {
             handleError(err);
+        } else if (event instanceof EngineEvent.Aborted) {
+            handleAborted();
         }
+    }
+
+    private void handleAborted() {
+        flushPartialLine();
+        spinner.stop();
+        if (isStreaming) {
+            screen.println();
+            isStreaming = false;
+        }
+        screen.println();
+        screen.println(Ansi.YELLOW + "  ✗ Interrupted by user" + Ansi.RESET);
+        currentResponse.setLength(0);
     }
 
     private void handleStreamEvent(StreamEvent event) {

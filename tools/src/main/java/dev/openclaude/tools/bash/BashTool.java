@@ -125,19 +125,29 @@ public class BashTool implements Tool {
             outputReader.setDaemon(true);
             outputReader.start();
 
-            boolean completed = process.waitFor(timeout, TimeUnit.MILLISECONDS);
-            if (!completed) {
+            try {
+                boolean completed = process.waitFor(timeout, TimeUnit.MILLISECONDS);
+                if (!completed) {
+                    process.destroyForcibly();
+                    process.waitFor(5, TimeUnit.SECONDS);
+                    outputReader.join(1_000);
+                    synchronized (output) {
+                        return ToolResult.error("Command timed out after " + (timeout / 1000) + " seconds.\n"
+                                + "Partial output:\n" + output);
+                    }
+                }
+
+                // Process exited — drain whatever is still buffered in the pipe
+                outputReader.join(10_000);
+            } catch (InterruptedException e) {
+                // Turn cancelled (Ctrl+C) — don't leave the child running
                 process.destroyForcibly();
-                process.waitFor(5, TimeUnit.SECONDS);
-                outputReader.join(1_000);
+                Thread.currentThread().interrupt();
                 synchronized (output) {
-                    return ToolResult.error("Command timed out after " + (timeout / 1000) + " seconds.\n"
+                    return ToolResult.error("Command interrupted by user.\n"
                             + "Partial output:\n" + output);
                 }
             }
-
-            // Process exited — drain whatever is still buffered in the pipe
-            outputReader.join(10_000);
 
             int exitCode = process.exitValue();
             String result = output.toString();

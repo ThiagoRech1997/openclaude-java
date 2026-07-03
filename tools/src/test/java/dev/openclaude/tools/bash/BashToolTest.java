@@ -50,6 +50,24 @@ class BashToolTest {
 
     @Test
     @Timeout(15)
+    void interrupt_killsChildProcessAndReturnsError() throws Exception {
+        var result = new java.util.concurrent.atomic.AtomicReference<ToolResult>();
+        Thread worker = new Thread(() ->
+                result.set(tool.execute(input("sleep 30", null), context)));
+        worker.start();
+        Thread.sleep(500); // let the child process start
+
+        worker.interrupt();
+        worker.join(5_000);
+
+        assertFalse(worker.isAlive(), "interrupted execute must return promptly");
+        assertTrue(result.get().isError());
+        assertTrue(result.get().textContent().contains("interrupted"),
+                "expected interrupt error, got: " + result.get().textContent());
+    }
+
+    @Test
+    @Timeout(15)
     void timeout_preservesPartialOutput() {
         ToolResult result = tool.execute(input("echo partial-marker; sleep 30", 800L), context);
 

@@ -294,6 +294,93 @@ class QueryEngineTest {
     }
 
     @Test
+    void abort_midStream_dropsPartialMessageAndEmitsAborted() {
+        ToolRegistry registry = new ToolRegistry();
+        List<StreamEvent> endTurn = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.TextDelta("partial answer"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.MessageDelta("end_turn", Usage.ZERO)
+        );
+
+        QueryEngine[] holder = new QueryEngine[1];
+        List<EngineEvent> events = new ArrayList<>();
+        QueryEngine engine = new QueryEngine(
+                scriptedClient(List.of(endTurn)), registry, "test-model", "sys", 1024,
+                Path.of("."), event -> {
+            events.add(event);
+            // Simulate Ctrl+C arriving while text is still streaming
+            if (event instanceof EngineEvent.Stream s
+                    && s.event() instanceof StreamEvent.TextDelta) {
+                holder[0].requestAbort();
+            }
+        }, null, null, null, null);
+        holder[0] = engine;
+
+        List<Message> messages = engine.run("question");
+
+        assertTrue(events.stream().anyMatch(e -> e instanceof EngineEvent.Aborted));
+        assertFalse(events.stream().anyMatch(e -> e instanceof EngineEvent.Error),
+                "abort must not surface as an error");
+        assertEquals(1, messages.size(), "partial assistant message must be dropped");
+        assertTrue(messages.get(0) instanceof Message.UserMessage);
+    }
+
+    @Test
+    void abort_duringToolExecution_pairsRemainingResults() {
+        QueryEngine[] holder = new QueryEngine[1];
+        AtomicInteger executions = new AtomicInteger();
+        Tool abortingTool = new Tool() {
+            @Override public String name() { return "Writer"; }
+            @Override public String description() { return "aborts mid-run"; }
+            @Override public JsonNode inputSchema() { return MAPPER.createObjectNode(); }
+            @Override public boolean isReadOnly() { return false; }
+            @Override public ToolResult execute(JsonNode input, ToolUseContext context) {
+                executions.incrementAndGet();
+                holder[0].requestAbort();
+                return ToolResult.success("done before abort");
+            }
+        };
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(abortingTool);
+
+        // Two parallel tool calls; abort lands after the first executes
+        List<StreamEvent> twoTools = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.ToolUseStart("t1", "Writer"),
+                new StreamEvent.ToolInputDelta("{}"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.ToolUseStart("t2", "Writer"),
+                new StreamEvent.ToolInputDelta("{}"),
+                new StreamEvent.ContentBlockStop(1),
+                new StreamEvent.MessageDelta("tool_use", Usage.ZERO)
+        );
+        ScriptedLlmClient client = scriptedClient(List.of(twoTools));
+
+        List<EngineEvent> events = new ArrayList<>();
+        QueryEngine engine = new QueryEngine(
+                client, registry, "test-model", "sys", 1024, Path.of("."),
+                events::add, null, null, null, null);
+        holder[0] = engine;
+
+        List<Message> messages = engine.run("go");
+
+        assertEquals(1, executions.get(), "second tool must not run after abort");
+        assertEquals(1, client.capturedMessages.size(), "no further LLM round after abort");
+        assertTrue(events.stream().anyMatch(e -> e instanceof EngineEvent.Aborted));
+
+        Message last = messages.get(messages.size() - 1);
+        List<ContentBlock.ToolResult> results = last.content().stream()
+                .filter(b -> b instanceof ContentBlock.ToolResult)
+                .map(b -> (ContentBlock.ToolResult) b)
+                .toList();
+        assertEquals(2, results.size(), "both tool_uses need results even on abort");
+        assertFalse(results.get(0).isError());
+        assertTrue(results.get(1).isError());
+        assertTrue(results.get(1).textContent().contains("Interrupted"));
+    }
+
+    @Test
     void run_withHistory_sendsFullConversationAndReturnsIt() {
         ToolRegistry registry = new ToolRegistry();
         List<StreamEvent> endTurn = List.of(

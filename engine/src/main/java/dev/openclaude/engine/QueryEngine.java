@@ -43,6 +43,10 @@ public class QueryEngine {
     private final PermissionManager permissions;
     private final PermissionHandler permissionHandler;
     private final Set<Path> readFiles = ConcurrentHashMap.newKeySet();
+    private volatile boolean abortRequested = false;
+
+    /** Thrown from the stream handler to unwind out of the LLM client on abort. */
+    private static final class AbortException extends RuntimeException {}
 
     public QueryEngine(
             LlmClient client,
@@ -128,12 +132,19 @@ public class QueryEngine {
         List<Message> messages = new ArrayList<>(history);
         messages.add(new Message.UserMessage(userPrompt));
 
+        abortRequested = false;
         Usage totalUsage = Usage.ZERO;
         int loopCount = 0;
         boolean exhausted = true;
 
         while (loopCount < MAX_TOOL_LOOPS) {
             loopCount++;
+
+            if (abortRequested) {
+                eventHandler.accept(new EngineEvent.Aborted());
+                exhausted = false;
+                break;
+            }
 
             // Poll for completed background agents
             if (backgroundManager != null) {
@@ -153,28 +164,44 @@ public class QueryEngine {
             // Stream the response and collect the assistant message
             AssistantMessageBuilder builder = new AssistantMessageBuilder();
 
-            client.streamMessage(request, event -> {
-                // Forward stream events to the caller
-                eventHandler.accept(new EngineEvent.Stream(event));
+            boolean streamAborted = false;
+            try {
+                client.streamMessage(request, event -> {
+                    if (abortRequested) {
+                        throw new AbortException();
+                    }
+                    // Forward stream events to the caller
+                    eventHandler.accept(new EngineEvent.Stream(event));
 
-                // Also accumulate the message
-                if (event instanceof StreamEvent.TextDelta td) {
-                    builder.addText(td.text());
-                } else if (event instanceof StreamEvent.ThinkingDelta th) {
-                    builder.addThinking(th.thinking());
-                } else if (event instanceof StreamEvent.ToolUseStart tus) {
-                    builder.startToolUse(tus.id(), tus.name());
-                } else if (event instanceof StreamEvent.ToolInputDelta tid) {
-                    builder.appendToolInput(tid.partialJson());
-                } else if (event instanceof StreamEvent.ContentBlockStop cbs) {
-                    builder.finishContentBlock();
-                } else if (event instanceof StreamEvent.MessageDelta md) {
-                    builder.setStopReason(md.stopReason());
-                    builder.setUsage(md.usage());
-                } else if (event instanceof StreamEvent.Error err) {
-                    builder.setError(err.message());
-                }
-            });
+                    // Also accumulate the message
+                    if (event instanceof StreamEvent.TextDelta td) {
+                        builder.addText(td.text());
+                    } else if (event instanceof StreamEvent.ThinkingDelta th) {
+                        builder.addThinking(th.thinking());
+                    } else if (event instanceof StreamEvent.ToolUseStart tus) {
+                        builder.startToolUse(tus.id(), tus.name());
+                    } else if (event instanceof StreamEvent.ToolInputDelta tid) {
+                        builder.appendToolInput(tid.partialJson());
+                    } else if (event instanceof StreamEvent.ContentBlockStop cbs) {
+                        builder.finishContentBlock();
+                    } else if (event instanceof StreamEvent.MessageDelta md) {
+                        builder.setStopReason(md.stopReason());
+                        builder.setUsage(md.usage());
+                    } else if (event instanceof StreamEvent.Error err) {
+                        builder.setError(err.message());
+                    }
+                });
+            } catch (AbortException e) {
+                streamAborted = true;
+            }
+
+            // On abort the partial assistant message is dropped — the history
+            // still ends on the prior user message, which the API accepts
+            if (streamAborted || (builder.hasError() && abortRequested)) {
+                eventHandler.accept(new EngineEvent.Aborted());
+                exhausted = false;
+                break;
+            }
 
             // Check for errors
             if (builder.hasError()) {
@@ -200,7 +227,16 @@ public class QueryEngine {
             // Execute each tool call and build a user message with results
             List<ContentBlock> resultBlocks = new ArrayList<>();
             boolean stopRequested = false;
+            boolean abortedTurn = false;
+            String skipReason = "Skipped: a hook requested stop.";
             for (ContentBlock.ToolUse toolUse : toolUses) {
+                if (abortRequested) {
+                    skipReason = "Interrupted by user.";
+                    stopRequested = true;
+                    abortedTurn = true;
+                    break;
+                }
+
                 JsonNode effectiveInput = toolUse.input();
                 ToolResult result;
 
@@ -278,7 +314,7 @@ public class QueryEngine {
                     ContentBlock.ToolUse skipped = toolUses.get(i);
                     resultBlocks.add(new ContentBlock.ToolResult(
                             skipped.id(),
-                            List.of(new ContentBlock.Text("Skipped: a hook requested stop.")),
+                            List.of(new ContentBlock.Text(skipReason)),
                             true));
                 }
             }
@@ -287,6 +323,9 @@ public class QueryEngine {
             messages.add(new Message.UserMessage(resultBlocks));
 
             if (stopRequested) {
+                if (abortedTurn) {
+                    eventHandler.accept(new EngineEvent.Aborted());
+                }
                 exhausted = false;
                 break;
             }
@@ -298,6 +337,15 @@ public class QueryEngine {
         }
 
         return messages;
+    }
+
+    /**
+     * Request cancellation of the in-flight run. Safe to call from any thread
+     * (e.g. a SIGINT handler); the loop stops at the next checkpoint and the
+     * returned history stays API-valid (every tool_use keeps a tool_result).
+     */
+    public void requestAbort() {
+        abortRequested = true;
     }
 
     private List<ContentBlock.ToolUse> extractToolUses(Message.AssistantMessage message) {

@@ -26,4 +26,7 @@ public sealed interface EngineEvent {
 
     /** An error occurred. */
     record Error(String message) implements EngineEvent {}
+
+    /** The run was cancelled by the user (e.g. Ctrl+C). */
+    record Aborted() implements EngineEvent {}
 }

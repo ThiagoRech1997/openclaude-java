@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -169,8 +170,38 @@ public class Repl {
         }
 
         int priorCount = session.getMessages().size();
-        List<Message> updated = engine.run(session.getMessages(), effectivePrompt);
-        session.addMessages(updated.subList(priorCount, updated.size()));
+        Thread replThread = Thread.currentThread();
+        AtomicBoolean turnActive = new AtomicBoolean(true);
+
+        // While a turn runs the terminal is in cooked mode, so Ctrl+C raises
+        // SIGINT — without this handler it kills the whole JVM instead of
+        // cancelling the turn.
+        sun.misc.SignalHandler previous = null;
+        try {
+            previous = sun.misc.Signal.handle(new sun.misc.Signal("INT"), sig -> {
+                if (turnActive.get()) {
+                    engine.requestAbort();
+                    replThread.interrupt();
+                }
+            });
+        } catch (Throwable ignored) {
+            // Signal API unavailable on this JVM — Ctrl+C keeps default behavior
+        }
+
+        try {
+            List<Message> updated = engine.run(session.getMessages(), effectivePrompt);
+            session.addMessages(updated.subList(priorCount, updated.size()));
+        } finally {
+            turnActive.set(false);
+            if (previous != null) {
+                try {
+                    sun.misc.Signal.handle(new sun.misc.Signal("INT"), previous);
+                } catch (Throwable ignored) {
+                }
+            }
+            // Clear a leftover interrupt flag so the next readLine isn't poisoned
+            Thread.interrupted();
+        }
         persistSession(screen);
         screen.println();
         return true;
