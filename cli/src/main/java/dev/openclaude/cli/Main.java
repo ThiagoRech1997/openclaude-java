@@ -338,8 +338,33 @@ public class Main implements Callable<Integer> {
             }
         }
 
-        for (var tool : McpToolBridge.createTools(mcpManager)) {
-            registry.register(tool);
+        var mcpTools = McpToolBridge.createTools(mcpManager);
+
+        // With a large catalog, MCP schemas dominate the prompt: defer them and
+        // let the model load schemas on demand via ToolSearch
+        int threshold = parseToolSearchThreshold();
+        if (threshold > 0 && registry.size() + mcpTools.size() > threshold) {
+            for (var tool : mcpTools) {
+                registry.registerDeferred(tool);
+            }
+            registry.register(new dev.openclaude.tools.toolsearch.ToolSearchTool(registry));
+            System.out.println(Ansi.DIM + "  " + mcpTools.size()
+                    + " MCP tool schemas deferred — loaded on demand via ToolSearch" + Ansi.RESET);
+        } else {
+            for (var tool : mcpTools) {
+                registry.register(tool);
+            }
+        }
+    }
+
+    /** Tool-count threshold above which MCP schemas are deferred; 0 disables deferral. */
+    private static int parseToolSearchThreshold() {
+        String raw = System.getenv("OPENCLAUDE_TOOL_SEARCH_THRESHOLD");
+        if (raw == null || raw.isBlank()) return 25;
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            return 25;
         }
     }
 
