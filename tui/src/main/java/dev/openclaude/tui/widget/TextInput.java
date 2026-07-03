@@ -39,13 +39,16 @@ public class TextInput {
     }
 
     /**
-     * Read input, returning null on both Ctrl+C and Ctrl+D.
+     * Read input. Ctrl+C discards the half-typed line and returns "" (the caller
+     * skips empty input and prompts again); only Ctrl+D (EOF) returns null.
      */
     public String readLineSafe() {
         try {
             return reader.readLine(prompt);
-        } catch (EndOfFileException | UserInterruptException e) {
+        } catch (EndOfFileException e) {
             return null;
+        } catch (UserInterruptException e) {
+            return "";
         }
     }
 }

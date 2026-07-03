@@ -175,8 +175,12 @@ public class Main implements Callable<Integer> {
                 permissions, null
         );
 
-        engine.run(prompt);
-        backgroundManager.shutdown();
+        try {
+            engine.run(prompt);
+        } finally {
+            backgroundManager.shutdown();
+            processManager.shutdown();
+        }
 
         return 0;
     }

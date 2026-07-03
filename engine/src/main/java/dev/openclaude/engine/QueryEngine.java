@@ -130,6 +130,7 @@ public class QueryEngine {
 
         Usage totalUsage = Usage.ZERO;
         int loopCount = 0;
+        boolean exhausted = true;
 
         while (loopCount < MAX_TOOL_LOOPS) {
             loopCount++;
@@ -178,6 +179,7 @@ public class QueryEngine {
             // Check for errors
             if (builder.hasError()) {
                 eventHandler.accept(new EngineEvent.Error(builder.getError()));
+                exhausted = false;
                 break;
             }
 
@@ -191,6 +193,7 @@ public class QueryEngine {
             if (toolUses.isEmpty()) {
                 // No tool calls — the agent is done
                 eventHandler.accept(new EngineEvent.Done(totalUsage, loopCount));
+                exhausted = false;
                 break;
             }
 
@@ -198,8 +201,6 @@ public class QueryEngine {
             List<ContentBlock> resultBlocks = new ArrayList<>();
             boolean stopRequested = false;
             for (ContentBlock.ToolUse toolUse : toolUses) {
-                eventHandler.accept(new EngineEvent.ToolExecutionStart(toolUse.name(), toolUse.id()));
-
                 JsonNode effectiveInput = toolUse.input();
                 ToolResult result;
 
@@ -208,9 +209,12 @@ public class QueryEngine {
                         : null;
 
                 if (pre instanceof HookDecision.Stop stop) {
+                    ToolResult stopResult = ToolResult.error("Hook stop: " + stop.stopReason());
+                    eventHandler.accept(new EngineEvent.ToolExecutionStart(toolUse.name(), toolUse.id()));
                     eventHandler.accept(new EngineEvent.ToolExecutionEnd(
-                            toolUse.name(), toolUse.id(),
-                            ToolResult.error("Hook stop: " + stop.stopReason())));
+                            toolUse.name(), toolUse.id(), stopResult));
+                    resultBlocks.add(new ContentBlock.ToolResult(
+                            toolUse.id(), stopResult.content(), true));
                     eventHandler.accept(new EngineEvent.Error(stop.stopReason()));
                     stopRequested = true;
                     break;
@@ -218,14 +222,18 @@ public class QueryEngine {
 
                 boolean toolRan;
                 if (pre instanceof HookDecision.Deny deny) {
+                    eventHandler.accept(new EngineEvent.ToolExecutionStart(toolUse.name(), toolUse.id()));
                     result = ToolResult.error("Blocked by hook: " + deny.reason());
                     toolRan = false;
                 } else {
                     if (pre instanceof HookDecision.ReplaceInput r) {
                         effectiveInput = r.newInput();
                     }
+                    // Resolve permission BEFORE announcing execution — the interactive
+                    // ASK prompt must not render under a "Running ..." spinner
                     PermissionManager.PermissionDecision permDecision =
                             checkPermission(toolUse.name(), effectiveInput);
+                    eventHandler.accept(new EngineEvent.ToolExecutionStart(toolUse.name(), toolUse.id()));
                     if (permDecision == PermissionManager.PermissionDecision.DENIED) {
                         if (permissions != null) permissions.recordDenial(toolUse.name());
                         result = ToolResult.error("Denied by permission policy: " + toolUse.name());
@@ -263,13 +271,28 @@ public class QueryEngine {
                         toolUse.id(), result.content(), result.isError()));
             }
 
+            // Every tool_use needs a matching tool_result — the API rejects
+            // the conversation otherwise
+            if (stopRequested && resultBlocks.size() < toolUses.size()) {
+                for (int i = resultBlocks.size(); i < toolUses.size(); i++) {
+                    ContentBlock.ToolUse skipped = toolUses.get(i);
+                    resultBlocks.add(new ContentBlock.ToolResult(
+                            skipped.id(),
+                            List.of(new ContentBlock.Text("Skipped: a hook requested stop.")),
+                            true));
+                }
+            }
+
             // Add tool results as a user message and loop
             messages.add(new Message.UserMessage(resultBlocks));
 
-            if (stopRequested) break;
+            if (stopRequested) {
+                exhausted = false;
+                break;
+            }
         }
 
-        if (loopCount >= MAX_TOOL_LOOPS) {
+        if (exhausted) {
             eventHandler.accept(new EngineEvent.Error(
                     "Agent loop reached maximum of " + MAX_TOOL_LOOPS + " iterations."));
         }

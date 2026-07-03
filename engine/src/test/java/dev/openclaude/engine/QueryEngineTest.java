@@ -218,6 +218,82 @@ class QueryEngineTest {
     }
 
     @Test
+    void hookStop_everyToolUseStillGetsAToolResult() {
+        FakeTool tool = new FakeTool("Writer", false);
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool);
+
+        // Two parallel tool calls; the hook stops on the first
+        List<StreamEvent> twoTools = List.of(
+                new StreamEvent.MessageStart("m1", "test", Usage.ZERO),
+                new StreamEvent.ToolUseStart("t1", "Writer"),
+                new StreamEvent.ToolInputDelta("{}"),
+                new StreamEvent.ContentBlockStop(0),
+                new StreamEvent.ToolUseStart("t2", "Writer"),
+                new StreamEvent.ToolInputDelta("{}"),
+                new StreamEvent.ContentBlockStop(1),
+                new StreamEvent.MessageDelta("tool_use", Usage.ZERO)
+        );
+        HookExecutor stoppingHook = new HookExecutor(HookConfig.empty(), "s", Path.of(".")) {
+            @Override public boolean isEmpty() { return false; }
+            @Override public HookDecision runPreToolUse(String toolName, JsonNode input) {
+                return new HookDecision.Stop("halt");
+            }
+        };
+
+        QueryEngine engine = new QueryEngine(
+                scriptedClient(List.of(twoTools)), registry, "test-model", "sys", 1024,
+                Path.of("."), e -> {}, null, stoppingHook, null, null
+        );
+
+        List<Message> messages = engine.run("go");
+
+        // Last message must pair BOTH tool_use ids with tool_results, or the
+        // API rejects this history when the conversation continues
+        Message last = messages.get(messages.size() - 1);
+        assertTrue(last instanceof Message.UserMessage);
+        List<ContentBlock.ToolResult> results = last.content().stream()
+                .filter(b -> b instanceof ContentBlock.ToolResult)
+                .map(b -> (ContentBlock.ToolResult) b)
+                .toList();
+        assertEquals(2, results.size());
+        assertEquals("t1", results.get(0).toolUseId());
+        assertEquals("t2", results.get(1).toolUseId());
+        assertTrue(results.get(0).isError());
+        assertTrue(results.get(1).isError());
+        assertEquals(0, tool.executions.get(), "no tool may run after Stop");
+    }
+
+    @Test
+    void ask_permissionResolvedBeforeToolExecutionStartEvent() {
+        FakeTool tool = new FakeTool("Writer", false);
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool);
+        PermissionManager pm = new PermissionManager(PermissionMode.DEFAULT);
+
+        List<EngineEvent> events = new ArrayList<>();
+        AtomicInteger startsSeenAtAsk = new AtomicInteger(-1);
+        QueryEngine engine = new QueryEngine(
+                scriptedClient(toolUseThenEndTurn("t1", "Writer", "{}")),
+                registry, "test-model", "sys", 1024, Path.of("."),
+                events::add, null, null, pm,
+                (name, input, isReadOnly) -> {
+                    startsSeenAtAsk.set((int) events.stream()
+                            .filter(e -> e instanceof EngineEvent.ToolExecutionStart).count());
+                    return PermissionManager.PermissionDecision.ALLOWED;
+                }
+        );
+
+        engine.run("please write");
+
+        assertEquals(0, startsSeenAtAsk.get(),
+                "ToolExecutionStart must not be emitted while the ASK prompt is up");
+        assertTrue(events.stream().anyMatch(e -> e instanceof EngineEvent.ToolExecutionStart),
+                "ToolExecutionStart must still be emitted after approval");
+        assertEquals(1, tool.executions.get());
+    }
+
+    @Test
     void run_withHistory_sendsFullConversationAndReturnsIt() {
         ToolRegistry registry = new ToolRegistry();
         List<StreamEvent> endTurn = List.of(

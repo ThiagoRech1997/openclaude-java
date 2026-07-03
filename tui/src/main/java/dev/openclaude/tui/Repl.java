@@ -99,16 +99,23 @@ public class Repl {
                 String trimmed = userInput.trim();
                 if (trimmed.isEmpty()) continue;
 
-                // Handle slash commands
-                if (trimmed.startsWith("/")) {
-                    CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
-                    if (result != null) {
-                        if (!handleCommandResult(result, screen, engine)) break;
-                        continue;
+                // A throwing command or renderer must not kill the whole session
+                try {
+                    // Handle slash commands
+                    if (trimmed.startsWith("/")) {
+                        CommandResult result = commandRegistry.dispatch(trimmed, cmdCtx);
+                        if (result != null) {
+                            if (!handleCommandResult(result, screen, engine)) break;
+                            continue;
+                        }
                     }
-                }
 
-                if (!runAgentTurn(trimmed, engine, screen)) break;
+                    if (!runAgentTurn(trimmed, engine, screen)) break;
+                } catch (RuntimeException e) {
+                    screen.println();
+                    screen.println(Ansi.RED + "  Error: " + e + Ansi.RESET);
+                    screen.println();
+                }
             }
         } catch (IOException e) {
             System.err.println("Failed to initialize terminal: " + e.getMessage());
@@ -149,7 +156,8 @@ public class Repl {
 
     /**
      * Process a command result. Returns false if the REPL should exit its main loop
-     * (only the Stop-hook path does so today — EXIT still calls System.exit).
+     * (EXIT and the Stop-hook path), letting the caller restore the terminal and
+     * shut managers down.
      */
     private boolean handleCommandResult(CommandResult result, TerminalScreen screen,
                                         QueryEngine engine) {
@@ -166,7 +174,7 @@ public class Repl {
                 screen.println();
                 screen.println(Ansi.DIM + "  Goodbye!" + Ansi.RESET);
                 screen.println();
-                System.exit(0);
+                return false;
             }
             case CLEAR -> screen.print(Ansi.CLEAR_SCREEN + Ansi.HOME);
             case RESET -> screen.println();
