@@ -11,6 +11,7 @@ import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
 
 import java.io.*;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +38,10 @@ import java.util.concurrent.Executors;
  *   {"type": "tool_result", "tool_name": "...", "output": "...", "is_error": false}
  *   {"type": "done", "full_text": "...", "input_tokens": N, "output_tokens": N}
  *   {"type": "error", "message": "..."}
+ *
+ * Security: binds the loopback interface by default. Set OPENCLAUDE_SERVE_HOST
+ * to expose another interface — this then REQUIRES OPENCLAUDE_SERVE_TOKEN, and
+ * clients must authenticate first: {"type": "auth", "token": "..."}.
  */
 public class GrpcAgentServer {
 
@@ -50,8 +55,14 @@ public class GrpcAgentServer {
     private final int port;
     private final BackgroundAgentManager backgroundManager;
     private final PermissionManager permissions;
+    private final String bindHost;
+    private final String authToken;
+    private final ExecutorService executor = Executors.newCachedThreadPool();
     private volatile boolean running = false;
-    private ServerSocket serverSocket;
+    private volatile ServerSocket serverSocket;
+
+    /** Cap on a single request line so one client cannot exhaust the heap. */
+    private static final int MAX_LINE_CHARS = 10_000_000;
 
     public GrpcAgentServer(LlmClient client, ToolRegistry toolRegistry,
                            String model, String systemPrompt, int maxTokens, int port,
@@ -63,6 +74,16 @@ public class GrpcAgentServer {
                            String model, String systemPrompt, int maxTokens, int port,
                            BackgroundAgentManager backgroundManager,
                            PermissionManager permissions) {
+        this(client, toolRegistry, model, systemPrompt, maxTokens, port, backgroundManager, permissions,
+                System.getenv().getOrDefault("OPENCLAUDE_SERVE_HOST", "127.0.0.1"),
+                System.getenv("OPENCLAUDE_SERVE_TOKEN"));
+    }
+
+    GrpcAgentServer(LlmClient client, ToolRegistry toolRegistry,
+                    String model, String systemPrompt, int maxTokens, int port,
+                    BackgroundAgentManager backgroundManager,
+                    PermissionManager permissions,
+                    String bindHost, String authToken) {
         this.client = client;
         this.toolRegistry = toolRegistry;
         this.model = model;
@@ -71,17 +92,24 @@ public class GrpcAgentServer {
         this.port = port;
         this.backgroundManager = backgroundManager;
         this.permissions = permissions;
+        this.bindHost = bindHost;
+        this.authToken = authToken;
     }
 
     /**
      * Start the server. Blocks until stopped.
      */
     public void start() throws IOException {
-        running = true;
-        serverSocket = new ServerSocket(port);
-        ExecutorService executor = Executors.newCachedThreadPool();
+        InetAddress bindAddress = InetAddress.getByName(bindHost);
+        if (!bindAddress.isLoopbackAddress() && (authToken == null || authToken.isBlank())) {
+            throw new IOException("Refusing to bind non-loopback address " + bindHost
+                    + " without OPENCLAUDE_SERVE_TOKEN set");
+        }
 
-        System.out.println("openclaude-java server listening on port " + port);
+        running = true;
+        serverSocket = new ServerSocket(port, 50, bindAddress);
+
+        System.out.println("openclaude-java server listening on " + bindHost + ":" + localPort());
 
         while (running) {
             try {
@@ -97,11 +125,18 @@ public class GrpcAgentServer {
         executor.shutdown();
     }
 
+    /** Actual bound port (differs from the configured one when it is 0). */
+    public int localPort() {
+        ServerSocket socket = serverSocket;
+        return socket != null ? socket.getLocalPort() : -1;
+    }
+
     public void stop() {
         running = false;
         try {
             if (serverSocket != null) serverSocket.close();
         } catch (IOException ignored) {}
+        executor.shutdownNow();
     }
 
     private void handleClient(Socket socket) {
@@ -111,25 +146,65 @@ public class GrpcAgentServer {
              PrintWriter writer = new PrintWriter(
                      new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true)) {
 
+            boolean authenticated = authToken == null || authToken.isBlank();
+
             String line;
-            while ((line = reader.readLine()) != null) {
+            while ((line = readBoundedLine(reader)) != null) {
                 var request = MAPPER.readTree(line);
                 String type = request.path("type").asText("");
+
+                if (!authenticated) {
+                    if ("auth".equals(type)
+                            && authToken.equals(request.path("token").asText(""))) {
+                        authenticated = true;
+                        sendEvent(writer, "auth_ok", "authenticated");
+                        continue;
+                    }
+                    sendEvent(writer, "error", "Authentication required");
+                    return; // one bad frame closes the connection
+                }
 
                 if ("chat".equals(type)) {
                     String message = request.path("message").asText("");
                     String workDir = request.path("working_directory").asText(
                             System.getProperty("user.dir"));
 
-                    handleChat(message, Path.of(workDir), writer);
+                    try {
+                        handleChat(message, Path.of(workDir), writer);
+                    } catch (Exception e) {
+                        // The client must always get a terminal frame, not a hang
+                        sendEvent(writer, "error", "Chat failed: " + e.getMessage());
+                    }
                 } else if ("cancel".equals(type)) {
                     // Cancel support would require AbortController-like mechanism
                     sendEvent(writer, "error", "Cancel not yet implemented");
+                } else {
+                    sendEvent(writer, "error", "Unknown request type: " + type);
                 }
             }
+        } catch (com.fasterxml.jackson.core.JacksonException e) {
+            // Malformed JSON: nothing sane to answer on a line protocol — drop the client
         } catch (Exception e) {
             // Client disconnected
         }
+    }
+
+    /**
+     * readLine with a size cap — an unbounded line from a client would
+     * otherwise grow the buffer until the heap is exhausted.
+     */
+    private static String readBoundedLine(BufferedReader reader) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        int c;
+        while ((c = reader.read()) != -1) {
+            if (c == '\n') return sb.toString();
+            if (c == '\r') continue;
+            if (sb.length() >= MAX_LINE_CHARS) {
+                throw new IOException("Request line exceeds " + MAX_LINE_CHARS + " chars");
+            }
+            sb.append((char) c);
+        }
+        return sb.length() > 0 ? sb.toString() : null;
     }
 
     private void handleChat(String message, Path workDir, PrintWriter writer) {
