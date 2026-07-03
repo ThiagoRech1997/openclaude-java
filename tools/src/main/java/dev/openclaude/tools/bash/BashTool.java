@@ -101,26 +101,43 @@ public class BashTool implements Tool {
                         + "\nUse the Monitor tool to check output.");
             }
 
+            // Read stdout on a separate thread — reading inline blocks until EOF,
+            // which makes the timeout below unreachable for hung commands
             StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append('\n');
-                    // Truncate very large outputs
-                    if (output.length() > 512_000) {
-                        output.append("\n... (output truncated at 512KB)\n");
-                        break;
+            Thread outputReader = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        synchronized (output) {
+                            output.append(line).append('\n');
+                            // Truncate very large outputs
+                            if (output.length() > 512_000) {
+                                output.append("\n... (output truncated at 512KB)\n");
+                                break;
+                            }
+                        }
                     }
+                } catch (Exception ignored) {
+                    // Pipe closed by the kill on timeout
                 }
-            }
+            }, "bash-tool-reader");
+            outputReader.setDaemon(true);
+            outputReader.start();
 
             boolean completed = process.waitFor(timeout, TimeUnit.MILLISECONDS);
             if (!completed) {
                 process.destroyForcibly();
-                return ToolResult.error("Command timed out after " + (timeout / 1000) + " seconds.\n"
-                        + "Partial output:\n" + output);
+                process.waitFor(5, TimeUnit.SECONDS);
+                outputReader.join(1_000);
+                synchronized (output) {
+                    return ToolResult.error("Command timed out after " + (timeout / 1000) + " seconds.\n"
+                            + "Partial output:\n" + output);
+                }
             }
+
+            // Process exited — drain whatever is still buffered in the pipe
+            outputReader.join(10_000);
 
             int exitCode = process.exitValue();
             String result = output.toString();

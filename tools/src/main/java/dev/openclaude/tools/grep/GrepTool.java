@@ -114,15 +114,21 @@ public class GrepTool implements Tool {
                     if (contextLines > 0) { cmd.add("-C"); cmd.add(String.valueOf(contextLines)); }
                 }
             }
-            if (headLimit != Integer.MAX_VALUE) {
+            // Per-file cap as an optimization — but only for content mode: in
+            // count mode it silently understates counts above the cap
+            if (isContentMode && headLimit != Integer.MAX_VALUE) {
                 cmd.add("--max-count");
-                cmd.add(String.valueOf(headLimit * 2)); // rg max-count is per-file
+                cmd.add(String.valueOf(Math.min((long) headLimit * 2, Integer.MAX_VALUE)));
             }
+            cmd.add("-e");
             cmd.add(pattern);
+            cmd.add("--");
             cmd.add(searchPath.toString());
         } else {
             cmd.add("grep");
             cmd.add("-r");
+            // Extended regex, matching ripgrep's syntax as closely as grep allows
+            cmd.add("-E");
             if (caseInsensitive) cmd.add("-i");
             if ("files_with_matches".equals(outputMode)) cmd.add("-l");
             if ("count".equals(outputMode)) cmd.add("-c");
@@ -138,7 +144,9 @@ public class GrepTool implements Tool {
                 cmd.add("--include");
                 cmd.add(glob);
             }
+            cmd.add("-e");
             cmd.add(pattern);
+            cmd.add("--");
             cmd.add(searchPath.toString());
         }
 
