@@ -142,7 +142,7 @@ public class AnthropicClient implements LlmClient {
         return MAPPER.writeValueAsString(root);
     }
 
-    private void parseSseStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
+    void parseSseStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
         List<ContentBlock> contentBlocks = new ArrayList<>();
         StringBuilder currentToolJson = new StringBuilder();
         String currentToolId = null;
@@ -228,7 +228,13 @@ public class AnthropicClient implements LlmClient {
                             JsonNode usageNode = json.get("usage");
                             if (usageNode != null) {
                                 Usage deltaUsage = parseUsage(usageNode);
-                                totalUsage = totalUsage.add(deltaUsage);
+                                // message_delta output_tokens is cumulative — replace the
+                                // running output count instead of adding on top of it
+                                totalUsage = new Usage(
+                                        totalUsage.inputTokens(),
+                                        deltaUsage.outputTokens(),
+                                        totalUsage.cacheCreationInputTokens(),
+                                        totalUsage.cacheReadInputTokens());
                             }
                             handler.accept(new StreamEvent.MessageDelta(stopReason, totalUsage));
                         }

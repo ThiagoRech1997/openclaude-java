@@ -82,6 +82,8 @@ public class OpenAIClient implements LlmClient {
         root.put("model", request.model());
         root.put("max_tokens", request.maxTokens());
         root.put("stream", true);
+        // Without this OpenAI never sends usage in a streamed response
+        root.putObject("stream_options").put("include_usage", true);
 
         // Build messages array in OpenAI format
         ArrayNode messagesArray = root.putArray("messages");
@@ -211,7 +213,7 @@ public class OpenAIClient implements LlmClient {
     /**
      * Parse OpenAI SSE stream and emit Anthropic-compatible StreamEvents.
      */
-    private void parseSseStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
+    void parseSseStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
         Map<Integer, String> toolCallIds = new HashMap<>();
         Map<Integer, String> toolCallNames = new HashMap<>();
         Map<Integer, StringBuilder> toolCallArgs = new HashMap<>();
@@ -219,6 +221,7 @@ public class OpenAIClient implements LlmClient {
         StringBuilder textAccum = new StringBuilder();
         Usage totalUsage = Usage.ZERO;
         String stopReason = null;
+        int openToolIndex = -1;
 
         handler.accept(new StreamEvent.MessageStart("", "", Usage.ZERO));
 
@@ -231,6 +234,17 @@ public class OpenAIClient implements LlmClient {
                 if ("[DONE]".equals(data)) break;
 
                 JsonNode json = MAPPER.readTree(data);
+
+                // Usage arrives in a final chunk with empty choices — parse it
+                // before the choices guard below or it is silently discarded
+                if (json.has("usage") && !json.get("usage").isNull()) {
+                    JsonNode u = json.get("usage");
+                    totalUsage = new Usage(
+                            u.path("prompt_tokens").asInt(0),
+                            u.path("completion_tokens").asInt(0),
+                            0, 0);
+                }
+
                 JsonNode choices = json.get("choices");
                 if (choices == null || choices.isEmpty()) continue;
 
@@ -261,8 +275,16 @@ public class OpenAIClient implements LlmClient {
                         for (JsonNode tc : delta.get("tool_calls")) {
                             int index = tc.path("index").asInt(0);
 
-                            if (tc.has("id") && !tc.get("id").isNull()) {
-                                // New tool call starting
+                            if (tc.has("id") && !tc.get("id").isNull()
+                                    && !toolCallIds.containsKey(index)) {
+                                // New tool call starting — close the previous one first,
+                                // otherwise parallel calls overwrite each other downstream
+                                if (openToolIndex >= 0) {
+                                    closeToolCall(openToolIndex, toolCallIds, toolCallNames,
+                                            toolCallArgs, contentBlocks, handler);
+                                }
+                                openToolIndex = index;
+
                                 String id = tc.get("id").asText();
                                 String name = tc.path("function").path("name").asText("");
                                 toolCallIds.put(index, id);
@@ -293,22 +315,11 @@ public class OpenAIClient implements LlmClient {
                 if (finishReason != null) {
                     stopReason = mapFinishReason(finishReason);
 
-                    // Finalize any pending tool calls
-                    for (var entry : toolCallIds.entrySet()) {
-                        int idx = entry.getKey();
-                        String id = entry.getValue();
-                        String name = toolCallNames.getOrDefault(idx, "");
-                        String argsStr = toolCallArgs.containsKey(idx) ? toolCallArgs.get(idx).toString() : "{}";
-
-                        JsonNode argsNode;
-                        try {
-                            argsNode = argsStr.isEmpty() ? MAPPER.createObjectNode() : MAPPER.readTree(argsStr);
-                        } catch (Exception e) {
-                            argsNode = MAPPER.createObjectNode();
-                        }
-
-                        contentBlocks.add(new ContentBlock.ToolUse(id, name, argsNode));
-                        handler.accept(new StreamEvent.ContentBlockStop(idx));
+                    // Finalize the still-open tool call, if any
+                    if (openToolIndex >= 0) {
+                        closeToolCall(openToolIndex, toolCallIds, toolCallNames,
+                                toolCallArgs, contentBlocks, handler);
+                        openToolIndex = -1;
                     }
 
                     // Flush remaining text
@@ -316,15 +327,6 @@ public class OpenAIClient implements LlmClient {
                         contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
                         textAccum.setLength(0);
                     }
-                }
-
-                // Usage info
-                if (json.has("usage") && !json.get("usage").isNull()) {
-                    JsonNode u = json.get("usage");
-                    totalUsage = new Usage(
-                            u.path("prompt_tokens").asInt(0),
-                            u.path("completion_tokens").asInt(0),
-                            0, 0);
                 }
             }
         } catch (Exception e) {
@@ -341,6 +343,33 @@ public class OpenAIClient implements LlmClient {
         Message.AssistantMessage finalMsg = new Message.AssistantMessage(
                 List.copyOf(contentBlocks), stopReason, totalUsage);
         handler.accept(new StreamEvent.MessageComplete(finalMsg));
+    }
+
+    /**
+     * Finalize a streamed tool call: parse the accumulated arguments, record the
+     * block, and emit the ContentBlockStop that closes it for downstream consumers.
+     */
+    private void closeToolCall(int index,
+                               Map<Integer, String> ids,
+                               Map<Integer, String> names,
+                               Map<Integer, StringBuilder> args,
+                               List<ContentBlock> contentBlocks,
+                               Consumer<StreamEvent> handler) {
+        String id = ids.remove(index);
+        if (id == null) return;
+        String name = names.getOrDefault(index, "");
+        StringBuilder sb = args.get(index);
+        String argsStr = sb != null ? sb.toString() : "{}";
+
+        JsonNode argsNode;
+        try {
+            argsNode = argsStr.isEmpty() ? MAPPER.createObjectNode() : MAPPER.readTree(argsStr);
+        } catch (Exception e) {
+            argsNode = MAPPER.createObjectNode();
+        }
+
+        contentBlocks.add(new ContentBlock.ToolUse(id, name, argsNode));
+        handler.accept(new StreamEvent.ContentBlockStop(index));
     }
 
     /**

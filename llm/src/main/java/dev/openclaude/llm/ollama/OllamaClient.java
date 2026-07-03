@@ -82,7 +82,7 @@ public class OllamaClient implements LlmClient {
         }
     }
 
-    private String buildRequestBody(LlmRequest request) throws JsonProcessingException {
+    String buildRequestBody(LlmRequest request) throws JsonProcessingException {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", request.model());
         root.put("stream", true);
@@ -101,26 +101,53 @@ public class OllamaClient implements LlmClient {
         }
 
         for (Message msg : request.messages()) {
-            ObjectNode msgNode = messagesArray.addObject();
-            msgNode.put("role", msg.role().value());
+            if (msg instanceof Message.AssistantMessage asst) {
+                ObjectNode msgNode = messagesArray.addObject();
+                msgNode.put("role", "assistant");
 
-            StringBuilder text = new StringBuilder();
-            for (ContentBlock block : msg.content()) {
-                if (block instanceof ContentBlock.Text t) {
-                    text.append(t.text());
-                } else if (block instanceof ContentBlock.ToolResult tr) {
-                    text.append("[Tool result for ").append(tr.toolUseId()).append("]: ");
-                    for (ContentBlock inner : tr.content()) {
-                        if (inner instanceof ContentBlock.Text innerText) {
-                            text.append(innerText.text());
-                        } else if (inner instanceof ContentBlock.Image img) {
-                            text.append("[image: ").append(img.source().mediaType())
-                                    .append(", base64 omitted]");
+                StringBuilder text = new StringBuilder();
+                ArrayNode toolCallsArray = null;
+                for (ContentBlock block : asst.content()) {
+                    if (block instanceof ContentBlock.Text t) {
+                        text.append(t.text());
+                    } else if (block instanceof ContentBlock.ToolUse tu) {
+                        if (toolCallsArray == null) {
+                            toolCallsArray = msgNode.putArray("tool_calls");
                         }
+                        ObjectNode fn = toolCallsArray.addObject().putObject("function");
+                        fn.put("name", tu.name());
+                        fn.set("arguments", tu.input());
                     }
                 }
+                msgNode.put("content", text.toString());
+            } else {
+                // User message: tool results become individual role:"tool" messages
+                // (Ollama matches them to the assistant's tool_calls by order)
+                StringBuilder text = new StringBuilder();
+                for (ContentBlock block : msg.content()) {
+                    if (block instanceof ContentBlock.Text t) {
+                        text.append(t.text());
+                    } else if (block instanceof ContentBlock.ToolResult tr) {
+                        StringBuilder trText = new StringBuilder();
+                        for (ContentBlock inner : tr.content()) {
+                            if (inner instanceof ContentBlock.Text innerText) {
+                                trText.append(innerText.text());
+                            } else if (inner instanceof ContentBlock.Image img) {
+                                trText.append("[image: ").append(img.source().mediaType())
+                                        .append(", base64 omitted]");
+                            }
+                        }
+                        ObjectNode toolMsg = messagesArray.addObject();
+                        toolMsg.put("role", "tool");
+                        toolMsg.put("content", trText.toString());
+                    }
+                }
+                if (text.length() > 0) {
+                    ObjectNode userMsg = messagesArray.addObject();
+                    userMsg.put("role", "user");
+                    userMsg.put("content", text.toString());
+                }
             }
-            msgNode.put("content", text.toString());
         }
 
         // Tools (Ollama supports OpenAI-compatible tool format since v0.3)
@@ -143,7 +170,7 @@ public class OllamaClient implements LlmClient {
      * Parse Ollama's JSONL streaming format.
      * Each line is a JSON object with { message: { role, content }, done: bool }
      */
-    private void parseJsonlStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
+    void parseJsonlStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
         List<ContentBlock> contentBlocks = new ArrayList<>();
         StringBuilder textAccum = new StringBuilder();
         Usage totalUsage = Usage.ZERO;
@@ -198,6 +225,9 @@ public class OllamaClient implements LlmClient {
 
                         handler.accept(new StreamEvent.ToolUseStart(id, name));
                         handler.accept(new StreamEvent.ToolInputDelta(MAPPER.writeValueAsString(argsNode)));
+                        // Close each tool call immediately — deferring the stops to the
+                        // end makes parallel calls overwrite each other downstream
+                        handler.accept(new StreamEvent.ContentBlockStop(pendingToolCalls.size()));
                         pendingToolCalls.add(new ToolCallState(id, name, argsNode));
                     }
                 }
@@ -212,10 +242,8 @@ public class OllamaClient implements LlmClient {
                         contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
                         textAccum.setLength(0);
                     }
-                    int idx = 0;
                     for (ToolCallState tcs : pendingToolCalls) {
                         contentBlocks.add(new ContentBlock.ToolUse(tcs.id(), tcs.name(), tcs.arguments()));
-                        handler.accept(new StreamEvent.ContentBlockStop(idx++));
                     }
                     if (!pendingToolCalls.isEmpty()) {
                         stopReason = "tool_use";
