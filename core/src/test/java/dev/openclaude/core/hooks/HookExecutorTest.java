@@ -120,6 +120,43 @@ class HookExecutorTest {
     }
 
     @Test
+    void preToolUse_exitOne_isNonBlocking() {
+        // Claude Code protocol: only exit 2 blocks; a broken hook (exit 1,
+        // missing binary) must not veto the tool call
+        HookExecutor hooks = executor(configFor(HookEvent.PRE_TOOL_USE, null,
+                "echo broken >&2; exit 1", 5));
+        HookDecision d = hooks.runPreToolUse("Bash", input());
+        assertInstanceOf(HookDecision.Allow.class, d);
+    }
+
+    @Test
+    void preToolUse_exit127_isNonBlocking() {
+        HookExecutor hooks = executor(configFor(HookEvent.PRE_TOOL_USE, null,
+                "this-binary-does-not-exist-anywhere", 5));
+        HookDecision d = hooks.runPreToolUse("Bash", input());
+        assertInstanceOf(HookDecision.Allow.class, d);
+    }
+
+    @Test
+    void userPromptSubmit_plainStdout_becomesAdditionalContext() {
+        HookExecutor hooks = executor(configFor(HookEvent.USER_PROMPT_SUBMIT, null,
+                "echo current branch is main", 5));
+        HookDecision d = hooks.runUserPromptSubmit("do the thing");
+        assertInstanceOf(HookDecision.Allow.class, d);
+        assertEquals("current branch is main", ((HookDecision.Allow) d).additionalContext());
+    }
+
+    @Test
+    void preToolUse_plainStdout_isNotInjectedAsContext() {
+        HookExecutor hooks = executor(configFor(HookEvent.PRE_TOOL_USE, null,
+                "echo random log line", 5));
+        HookDecision d = hooks.runPreToolUse("Bash", input());
+        assertInstanceOf(HookDecision.Allow.class, d);
+        assertNull(((HookDecision.Allow) d).additionalContext(),
+                "plain stdout is context only for UserPromptSubmit");
+    }
+
+    @Test
     void timeout_deniesForPreToolUse() {
         HookExecutor hooks = executor(configFor(HookEvent.PRE_TOOL_USE, null, "sleep 5", 1));
         HookDecision d = hooks.runPreToolUse("Bash", input());

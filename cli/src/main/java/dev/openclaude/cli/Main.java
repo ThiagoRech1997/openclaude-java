@@ -114,7 +114,8 @@ public class Main implements Callable<Integer> {
         if (serveMode) {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
-            ToolRegistry tools = createToolRegistry(client, config, permissions);
+            HookExecutor serveHooks = buildHookExecutor(cwd);
+            ToolRegistry tools = createToolRegistry(client, config, permissions, serveHooks);
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (processManager != null) processManager.shutdown();
@@ -137,10 +138,10 @@ public class Main implements Callable<Integer> {
         if (prompt == null && !printMode) {
             config.validate();
             LlmClient client = LlmClientFactory.create(config);
-            ToolRegistry tools = createToolRegistry(client, config, permissions);
+            HookExecutor hooks = buildHookExecutor(cwd);
+            ToolRegistry tools = createToolRegistry(client, config, permissions, hooks);
 
             CommandRegistry commands = new CommandRegistryFactory().create(cwd);
-            HookExecutor hooks = buildHookExecutor(cwd);
 
             Repl repl = new Repl(config, client, tools, cwd, effectiveSystemPrompt, commands, permissions,
                     backgroundManager, hooks);
@@ -161,13 +162,12 @@ public class Main implements Callable<Integer> {
         config.validate();
 
         LlmClient client = LlmClientFactory.create(config);
-        ToolRegistry tools = createToolRegistry(client, config, permissions);
+        HookExecutor hooks = buildHookExecutor(cwd);
+        ToolRegistry tools = createToolRegistry(client, config, permissions, hooks);
 
         System.out.println(Ansi.DIM + config.provider() + " / " + config.model()
                 + " | " + tools.size() + " tools" + Ansi.RESET);
         System.out.println();
-
-        HookExecutor hooks = buildHookExecutor(cwd);
 
         QueryEngine engine = new QueryEngine(
                 client, tools, config.model(), effectiveSystemPrompt,
@@ -234,7 +234,8 @@ public class Main implements Callable<Integer> {
         return new HookExecutor(hookConfig, UUID.randomUUID().toString(), cwd);
     }
 
-    private ToolRegistry createToolRegistry(LlmClient client, AppConfig config, PermissionManager permissions) {
+    private ToolRegistry createToolRegistry(LlmClient client, AppConfig config,
+                                            PermissionManager permissions, HookExecutor hooks) {
         ToolRegistry registry = new ToolRegistry();
         processManager = new BackgroundProcessManager();
         registry.register(new BashTool(processManager));
@@ -263,7 +264,7 @@ public class Main implements Callable<Integer> {
 
         SubAgentRunner agentRunner = new SubAgentRunner(
                 client, registry, config.model(), config.maxTokens(), backgroundManager, permissions,
-                subAgentRegistry);
+                subAgentRegistry, hooks);
         registry.register(new AgentTool(agentRunner, subAgentRegistry.names()));
 
         // Load plugins

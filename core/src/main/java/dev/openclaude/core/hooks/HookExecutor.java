@@ -14,7 +14,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * Runs the shell commands configured for a hook event and parses their stdout into a
  * {@link HookDecision}. The wire format — both the JSON written to stdin and the JSON
- * expected back on stdout — matches Claude Code's hook protocol.
+ * expected back on stdout — matches Claude Code's hook protocol, including exit-code
+ * semantics: only exit code 2 is a blocking error; any other non-zero exit is
+ * non-blocking (stderr is surfaced and execution continues).
  *
  * <h2>Asymmetry: PostToolUse cannot deny</h2>
  * The tool has already executed by the time a PostToolUse hook runs. A
@@ -87,7 +89,8 @@ public class HookExecutor {
             if (!matcher.matches(toolName)) continue;
 
             for (HookConfig.HookCommand cmd : matcher.hooks()) {
-                HookDecision d = runOne(cmd, payload, allowDeny);
+                HookDecision d = runOne(cmd, payload, allowDeny,
+                        event == HookEvent.USER_PROMPT_SUBMIT);
                 if (d instanceof HookDecision.Stop) return d;
                 if (d instanceof HookDecision.Deny) return d;
                 if (d instanceof HookDecision.ReplaceInput) return d;
@@ -102,7 +105,8 @@ public class HookExecutor {
                 accumulatedContext.length() > 0 ? accumulatedContext.toString() : null);
     }
 
-    private HookDecision runOne(HookConfig.HookCommand cmd, ObjectNode payload, boolean allowDeny) {
+    private HookDecision runOne(HookConfig.HookCommand cmd, ObjectNode payload,
+                                boolean allowDeny, boolean plainStdoutAsContext) {
         ProcessBuilder pb = new ProcessBuilder("/bin/sh", "-c", cmd.command());
         if (cwd != null) pb.directory(cwd.toFile());
 
@@ -152,7 +156,7 @@ public class HookExecutor {
         String stdout = outDrainer.content();
         String stderr = errDrainer.content();
 
-        return parseDecision(exitCode, stdout, stderr, allowDeny);
+        return parseDecision(exitCode, stdout, stderr, allowDeny, plainStdoutAsContext);
     }
 
     /**
@@ -160,14 +164,23 @@ public class HookExecutor {
      * When {@code allowDeny} is false (PostToolUse), a {@code block}/{@code deny} decision
      * is downgraded to Allow(additionalContext=reason).
      */
-    private HookDecision parseDecision(int exitCode, String stdout, String stderr, boolean allowDeny) {
-        // Non-zero exit = deny; stderr becomes the reason.
-        if (exitCode != 0) {
+    private HookDecision parseDecision(int exitCode, String stdout, String stderr,
+                                       boolean allowDeny, boolean plainStdoutAsContext) {
+        // Claude Code protocol: exit 2 is the blocking error, stderr is the reason.
+        if (exitCode == 2) {
             String reason = !stderr.isBlank() ? stderr.trim()
                     : !stdout.isBlank() ? stdout.trim()
-                    : "Hook exited with code " + exitCode;
+                    : "Hook exited with code 2";
             return allowDeny ? new HookDecision.Deny(reason)
                     : new HookDecision.Allow(reason);
+        }
+        // Any other non-zero exit is non-blocking: a broken hook (exit 1, missing
+        // binary = 127) must not veto the tool call.
+        if (exitCode != 0) {
+            if (!stderr.isBlank()) {
+                System.err.println("[hook exit " + exitCode + "] " + stderr.trim());
+            }
+            return HookDecision.Allow.empty();
         }
 
         String trimmed = stdout.trim();
@@ -177,9 +190,14 @@ public class HookExecutor {
         try {
             root = MAPPER.readTree(trimmed);
         } catch (IOException e) {
-            return HookDecision.Allow.empty();
+            root = null;
         }
-        if (root == null || !root.isObject()) return HookDecision.Allow.empty();
+        if (root == null || !root.isObject()) {
+            // UserPromptSubmit: plain stdout on success is injected as context
+            return plainStdoutAsContext
+                    ? new HookDecision.Allow(trimmed)
+                    : HookDecision.Allow.empty();
+        }
 
         JsonNode contNode = root.get("continue");
         if (contNode != null && contNode.isBoolean() && !contNode.asBoolean()) {
