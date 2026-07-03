@@ -22,7 +22,8 @@ public final class LlmClientFactory {
         return switch (config.provider()) {
             case "anthropic" -> new AnthropicClient(config.apiKey(), config.baseUrl());
             case "ollama" -> new OllamaClient(config.baseUrl());
-            case "openai", "azure", "deepseek", "groq", "mistral",
+            case "azure" -> new OpenAIClient(config.apiKey(), config.baseUrl(), true);
+            case "openai", "deepseek", "groq", "mistral",
                  "together", "local", "openrouter", "github" ->
                     new OpenAIClient(config.apiKey(), config.baseUrl());
             default -> {

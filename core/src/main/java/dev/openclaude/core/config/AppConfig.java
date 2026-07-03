@@ -53,7 +53,8 @@ public record AppConfig(
         boolean useGithub = isTrue("CLAUDE_CODE_USE_GITHUB");
         if (useGithub && !githubToken.isBlank()) {
             String model = env("OPENCLAUDE_MODEL", "gpt-4o");
-            String baseUrl = env("GITHUB_MODELS_BASE_URL", "https://models.inference.ai.azure.com/v1");
+            // No /v1 prefix — the GitHub Models endpoint serves /chat/completions directly
+            String baseUrl = env("GITHUB_MODELS_BASE_URL", "https://models.inference.ai.azure.com");
             return new AppConfig(githubToken, model, baseUrl, "github",
                     intEnv("OPENCLAUDE_MAX_TOKENS", DEFAULT_MAX_TOKENS));
         }

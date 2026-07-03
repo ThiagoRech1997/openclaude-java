@@ -44,5 +44,15 @@ class AnthropicClientTest {
         // message_delta output_tokens (50) is the cumulative total — the initial
         // output_tokens from message_start (2) must not be added on top
         assertEquals(50, md.usage().outputTokens());
+
+        // The final message must carry the streamed text, not just tool blocks
+        var complete = events.stream()
+                .filter(e -> e instanceof StreamEvent.MessageComplete)
+                .map(e -> (StreamEvent.MessageComplete) e)
+                .findFirst().orElseThrow();
+        boolean hasText = complete.message().content().stream()
+                .anyMatch(b -> b instanceof dev.openclaude.core.model.ContentBlock.Text t
+                        && t.text().equals("hi"));
+        assertTrue(hasText, "MessageComplete must include the streamed text block");
     }
 }

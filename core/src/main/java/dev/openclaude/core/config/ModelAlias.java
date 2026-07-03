@@ -10,7 +10,7 @@ public final class ModelAlias {
     private static final Map<String, String> ALIASES = Map.of(
             "sonnet", "claude-sonnet-4-20250514",
             "opus", "claude-opus-4-20250514",
-            "haiku", "claude-haiku-3-5-20241022"
+            "haiku", "claude-3-5-haiku-20241022"
     );
 
     private ModelAlias() {}

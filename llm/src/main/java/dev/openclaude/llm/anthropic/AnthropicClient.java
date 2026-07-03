@@ -145,6 +145,8 @@ public class AnthropicClient implements LlmClient {
     void parseSseStream(java.io.InputStream inputStream, Consumer<StreamEvent> handler) {
         List<ContentBlock> contentBlocks = new ArrayList<>();
         StringBuilder currentToolJson = new StringBuilder();
+        StringBuilder textAccum = new StringBuilder();
+        StringBuilder thinkingAccum = new StringBuilder();
         String currentToolId = null;
         String currentToolName = null;
         String stopReason = null;
@@ -192,10 +194,12 @@ public class AnthropicClient implements LlmClient {
                                 switch (type) {
                                     case "text_delta" -> {
                                         String text = delta.path("text").asText();
+                                        textAccum.append(text);
                                         handler.accept(new StreamEvent.TextDelta(text));
                                     }
                                     case "thinking_delta" -> {
                                         String thinking = delta.path("thinking").asText();
+                                        thinkingAccum.append(thinking);
                                         handler.accept(new StreamEvent.ThinkingDelta(thinking));
                                     }
                                     case "input_json_delta" -> {
@@ -217,6 +221,17 @@ public class AnthropicClient implements LlmClient {
                                 currentToolId = null;
                                 currentToolName = null;
                                 currentToolJson.setLength(0);
+                            } else {
+                                // Text/thinking must land in contentBlocks too, or the
+                                // MessageComplete message carries only tool_use blocks
+                                if (thinkingAccum.length() > 0) {
+                                    contentBlocks.add(new ContentBlock.Thinking(thinkingAccum.toString()));
+                                    thinkingAccum.setLength(0);
+                                }
+                                if (textAccum.length() > 0) {
+                                    contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
+                                    textAccum.setLength(0);
+                                }
                             }
                             handler.accept(new StreamEvent.ContentBlockStop(index));
                         }
@@ -239,6 +254,15 @@ public class AnthropicClient implements LlmClient {
                             handler.accept(new StreamEvent.MessageDelta(stopReason, totalUsage));
                         }
                         case "message_stop" -> {
+                            // Flush anything a missing content_block_stop left behind
+                            if (thinkingAccum.length() > 0) {
+                                contentBlocks.add(new ContentBlock.Thinking(thinkingAccum.toString()));
+                                thinkingAccum.setLength(0);
+                            }
+                            if (textAccum.length() > 0) {
+                                contentBlocks.add(new ContentBlock.Text(textAccum.toString()));
+                                textAccum.setLength(0);
+                            }
                             Message.AssistantMessage finalMessage = new Message.AssistantMessage(
                                     List.copyOf(contentBlocks), stopReason, totalUsage);
                             handler.accept(new StreamEvent.MessageComplete(finalMessage));

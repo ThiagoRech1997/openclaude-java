@@ -34,10 +34,25 @@ public class OpenAIClient implements LlmClient {
     private final String apiKey;
     private final String baseUrl;
     private final HttpClient httpClient;
+    private final boolean azure;
+    private final String azureApiVersion;
 
     public OpenAIClient(String apiKey, String baseUrl) {
+        this(apiKey, baseUrl, false);
+    }
+
+    /**
+     * @param azure Azure OpenAI auth mode: API key goes in the {@code api-key} header
+     *              (Bearer only works with Entra ID tokens there) and requests carry an
+     *              {@code api-version} query param. The base URL must include the
+     *              deployment path, e.g. {@code https://<res>.openai.azure.com/openai/deployments/<name>}.
+     */
+    public OpenAIClient(String apiKey, String baseUrl, boolean azure) {
         this.apiKey = apiKey;
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        this.azure = azure;
+        this.azureApiVersion = System.getenv()
+                .getOrDefault("AZURE_OPENAI_API_VERSION", "2024-10-21");
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
                 .version(HttpClient.Version.HTTP_1_1)
@@ -53,13 +68,21 @@ public class OpenAIClient implements LlmClient {
     public void streamMessage(LlmRequest request, Consumer<StreamEvent> handler) {
         try {
             String body = buildRequestBody(request);
-            HttpRequest httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/chat/completions"))
+            String url = baseUrl + "/chat/completions";
+            if (azure && !url.contains("api-version=")) {
+                url += "?api-version=" + azureApiVersion;
+            }
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofMinutes(10))
-                    .build();
+                    .timeout(Duration.ofMinutes(10));
+            if (azure) {
+                requestBuilder.header("api-key", apiKey);
+            } else {
+                requestBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+            HttpRequest httpRequest = requestBuilder.build();
 
             HttpResponse<java.io.InputStream> response = httpClient.send(
                     httpRequest, HttpResponse.BodyHandlers.ofInputStream());
