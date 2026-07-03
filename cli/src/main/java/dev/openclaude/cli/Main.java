@@ -288,6 +288,8 @@ public class Main implements Callable<Integer> {
         registry.register(new dev.openclaude.tools.plan.ExitPlanModeTool(permissions));
         registry.register(new dev.openclaude.tools.notify.PushNotificationTool(
                 dev.openclaude.tools.notify.NotificationConfigLoader.load()));
+        registry.register(new dev.openclaude.tools.worktree.EnterWorktreeTool());
+        registry.register(new dev.openclaude.tools.worktree.ExitWorktreeTool());
 
         // AgentTool (sub-agents) — sub-agents inherit the parent's PermissionManager
         // without an interactive handler: any ASK falls through to DENY.

@@ -9,6 +9,7 @@ import dev.openclaude.engine.agents.SubAgentRegistry;
 import dev.openclaude.llm.LlmClient;
 import dev.openclaude.tools.ToolRegistry;
 import dev.openclaude.tools.ToolUseContext;
+import dev.openclaude.tools.worktree.WorktreeSession;
 import dev.openclaude.tools.agent.AgentRunRequest;
 import dev.openclaude.tools.agent.AgentRunner;
 

@@ -1,4 +1,4 @@
-package dev.openclaude.engine;
+package dev.openclaude.tools.worktree;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -40,24 +40,36 @@ public final class WorktreeSession implements AutoCloseable {
     }
 
     public static WorktreeSession create(Path parentRepo) throws IOException {
+        return create(parentRepo, null, null);
+    }
+
+    /**
+     * @param branchName branch to create for the worktree; null/blank generates a unique name
+     * @param baseRef    ref to fork from; null/blank uses HEAD
+     */
+    public static WorktreeSession create(Path parentRepo, String branchName, String baseRef)
+            throws IOException {
         GitResult check = runGit(parentRepo, "rev-parse", "--git-dir");
         if (check.exitCode != 0) {
             throw new IOException("isolation requires a git repository at " + parentRepo);
         }
 
-        GitResult sha = runGit(parentRepo, "rev-parse", "HEAD");
+        String base = baseRef == null || baseRef.isBlank() ? "HEAD" : baseRef;
+        GitResult sha = runGit(parentRepo, "rev-parse", base);
         if (sha.exitCode != 0) {
-            throw new IOException("failed to resolve HEAD in " + parentRepo + ": " + sha.output);
+            throw new IOException("failed to resolve " + base + " in " + parentRepo + ": " + sha.output);
         }
         String startSha = sha.output.trim();
 
-        String branch = "agent-" + LocalDateTime.now().format(TS) + "-"
-                + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        String branch = branchName != null && !branchName.isBlank()
+                ? branchName
+                : "agent-" + LocalDateTime.now().format(TS) + "-"
+                        + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         Path worktreeRoot = Path.of(System.getProperty("java.io.tmpdir"), "openclaude-worktrees");
         Files.createDirectories(worktreeRoot);
-        Path worktreePath = worktreeRoot.resolve(branch);
+        Path worktreePath = worktreeRoot.resolve(branch.replaceAll("[^a-zA-Z0-9._-]", "_"));
 
-        GitResult add = runGit(parentRepo, "worktree", "add", "-b", branch, worktreePath.toString(), "HEAD");
+        GitResult add = runGit(parentRepo, "worktree", "add", "-b", branch, worktreePath.toString(), base);
         if (add.exitCode != 0) {
             throw new IOException("git worktree add failed: " + add.output);
         }

@@ -55,6 +55,8 @@ public class QueryEngine {
     private final PermissionManager permissions;
     private final PermissionHandler permissionHandler;
     private final Set<Path> readFiles = ConcurrentHashMap.newKeySet();
+    /** Shared across tool executions so EnterWorktree can move the session's cwd. */
+    private final dev.openclaude.tools.WorkspaceState workspace;
     private volatile boolean abortRequested = false;
 
     /** Thrown from the stream handler to unwind out of the LLM client on abort. */
@@ -120,6 +122,7 @@ public class QueryEngine {
         this.systemPrompt = systemPrompt;
         this.maxTokens = maxTokens;
         this.workingDirectory = workingDirectory;
+        this.workspace = new dev.openclaude.tools.WorkspaceState(workingDirectory);
         this.eventHandler = eventHandler;
         this.backgroundManager = backgroundManager;
         this.hooks = hooks;
@@ -404,7 +407,7 @@ public class QueryEngine {
         }
 
         Tool tool = toolOpt.get();
-        ToolUseContext context = new ToolUseContext(workingDirectory, false, readFiles);
+        ToolUseContext context = new ToolUseContext(workspace, false, readFiles);
 
         try {
             return tool.execute(toolInput, context);
