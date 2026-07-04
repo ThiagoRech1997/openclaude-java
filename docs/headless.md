@@ -14,11 +14,37 @@ OpenClaude Java can run as a headless JSON-over-TCP server, allowing other appli
 
 The server listens for TCP connections and handles each client in a separate thread via `CachedThreadPool`.
 
+### Binding & Authentication
+
+By default the server binds the **loopback interface** (`127.0.0.1`) — it is not reachable from other machines. Two environment variables control exposure:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENCLAUDE_SERVE_HOST` | `127.0.0.1` | Interface to bind (e.g. `0.0.0.0` to expose on all interfaces) |
+| `OPENCLAUDE_SERVE_TOKEN` | (unset) | Shared secret clients must present via an `auth` request |
+
+Binding a non-loopback address **requires** `OPENCLAUDE_SERVE_TOKEN` — the server refuses to start otherwise:
+
+```bash
+OPENCLAUDE_SERVE_HOST=0.0.0.0 OPENCLAUDE_SERVE_TOKEN=my-secret \
+  ./gradlew :cli:run --args="--serve"
+```
+
+Setting the token also works on loopback if you want auth locally.
+
 ## Protocol
 
 **Newline-delimited JSON** over TCP. Each message is a single JSON object followed by a newline (`\n`).
 
 ### Client -> Server
+
+#### Auth Request
+
+```json
+{"type": "auth", "token": "my-secret"}
+```
+
+When `OPENCLAUDE_SERVE_TOKEN` is set, this must be the **first** message on every connection. On success the server replies `{"type": "auth_ok", "message": "authenticated"}`. Any other frame sent before successful auth (or a wrong token) gets `{"type": "error", "message": "Authentication required"}` and the connection is closed. When no token is configured, skip this and send `chat` directly.
 
 #### Chat Request
 
@@ -144,9 +170,12 @@ def chat(message, host="localhost", port=9818):
 chat("Create a file called hello.py with a hello world program")
 ```
 
+If the server has `OPENCLAUDE_SERVE_TOKEN` set, send `{"type": "auth", "token": "..."}` first and wait for the `auth_ok` event before sending the chat request.
+
 ## Limitations
 
-- No authentication — the server trusts all connections
+- No TLS — the token and all traffic are plaintext; keep the server on loopback or put it behind a tunnel/reverse proxy for remote use
 - No cancel support (planned)
 - No conversation persistence across requests — each `chat` message starts a fresh agent loop
 - Single conversation per connection at a time
+- Request lines are capped at 10,000,000 characters; longer lines close the connection

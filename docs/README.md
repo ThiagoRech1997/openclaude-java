@@ -16,6 +16,7 @@ OpenClaude Java is a multi-provider coding agent CLI written in Java 17. It supp
 | [Configuration](configuration.md) | Environment variables, provider detection, directories |
 | [Headless Server](headless.md) | JSON-over-TCP protocol, usage, client examples |
 | [Development Guide](development.md) | Building, testing, project layout, extending the system |
+| [Smoke Test Harness](../smoke/README.md) | Side-by-side parity runs of OpenClaude vs Claude Code |
 
 ## Quick Start
 

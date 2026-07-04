@@ -7,19 +7,49 @@ Slash commands provide in-session control of the REPL — model switching, sessi
 | Command | Aliases | Description |
 |---------|---------|-------------|
 | `/help` | `h`, `?` | Show available commands |
-| `/clear` | `c` | Clear the screen |
-| `/exit` | `q`, `exit` | Exit the REPL |
-| `/model` | `m` | Show or switch the current model |
+| `/clear` | `cls` | Clear the screen |
+| `/exit` | `quit`, `q` | Exit the REPL |
+| `/model` | | Show or switch the current model |
 | `/tools` | | List all registered tools |
 | `/cost` | | Show token usage and estimated cost |
 | `/permissions` | `perms` | Show permission rules and mode |
-| `/reset` | `r` | Reset the conversation (clear messages) |
+| `/reset` | `new` | Reset the conversation (clear messages) |
 | `/status` | | Show session status (model, provider, tokens, turns) |
-| `/compact` | `ctx` | Compact conversation context (summarize old messages) |
+| `/compact` | | Compact conversation context (summarize old messages) |
 | `/diff` | | Show git diff of working directory |
 | `/export` | | Export conversation to file |
 | `/doctor` | | Diagnose configuration and connectivity |
-| `/docs` | | Open or generate documentation |
+| `/docs` | `documentation` | Open or generate documentation |
+| `/memory` | `claude-md` | Show loaded CLAUDE.md files |
+
+## Custom Slash Commands
+
+Markdown files become slash commands — no Java required. The loader scans two directories (non-recursive):
+
+| Path | Source tag |
+|------|------------|
+| `~/.claude/commands/*.md` | `user` |
+| `.claude/commands/*.md` (in working directory) | `project` |
+
+The command name is the filename without `.md` (lowercased). Project-local commands override user-global ones with the same name; collisions with a built-in command name **or alias** are skipped with a warning (a repo-provided `q.md` cannot hijack `/q`).
+
+### File Format
+
+```markdown
+---
+description: Summarize a file
+argument-hint: <path>
+allowed-tools: [Read, Grep]
+---
+Summarize the file at $ARGUMENTS in three bullet points.
+```
+
+- **Body** — invoking `/<name> args` substitutes `$ARGUMENTS` with the raw argument string and submits the result to the LLM as a user prompt (`CommandResult.Action.SUBMIT_PROMPT`).
+- **`description`** — shown in `/help` (default: `(custom command)`).
+- **`argument-hint`** — appended to the description as `[<hint>]`.
+- **`allowed-tools`** — inline list only (block lists are not supported). When non-empty, the submitted turn runs with the tool registry restricted to those tool names.
+
+Frontmatter is optional; without it the whole file is the prompt body.
 
 ## Command Interface
 
@@ -36,13 +66,15 @@ public interface Command {
 ### CommandResult
 
 ```java
-public record CommandResult(String output, Action action) {
-    enum Action { CONTINUE, EXIT, CLEAR, RESET }
+public record CommandResult(String output, Action action, List<String> allowedTools) {
+    enum Action { CONTINUE, EXIT, CLEAR, RESET, SUBMIT_PROMPT }
 
     static CommandResult text(String output);   // Display text, continue
     static CommandResult exit();                 // Exit REPL
     static CommandResult clear();               // Clear screen
     static CommandResult reset(String output);  // Reset conversation
+    static CommandResult submitPrompt(String prompt);
+    static CommandResult submitPrompt(String prompt, List<String> allowedTools);
 }
 ```
 
@@ -51,6 +83,9 @@ The `Action` tells the REPL what to do after the command:
 - **EXIT** — terminate the REPL loop
 - **CLEAR** — clear the terminal screen
 - **RESET** — clear the conversation messages
+- **SUBMIT_PROMPT** — feed `output` to the LLM as a user prompt (used by custom slash commands)
+
+`allowedTools` only applies to `SUBMIT_PROMPT`: when non-null and non-empty, the submitted turn runs with the tool registry restricted to those tool names.
 
 ### CommandContext
 
@@ -80,6 +115,8 @@ public final class CommandRegistry {
 ```
 
 **Dispatch flow:** The registry parses the input string, splits the command name from arguments, looks up the command (by name or alias), and calls `execute()`.
+
+`CommandRegistryFactory.create()` registers the built-ins; `create(Path cwd)` additionally discovers [custom markdown commands](#custom-slash-commands) in `~/.claude/commands/` and `<cwd>/.claude/commands/`.
 
 ## Adding a New Command
 

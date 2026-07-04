@@ -5,12 +5,15 @@ Um agente de codificação CLI multi-provider escrito em Java 17 — reimplement
 ## Funcionalidades
 
 - **Multi-provider** — Anthropic, OpenAI, Ollama, OpenRouter, GitHub Models, Azure, Deepseek, Groq, Mistral, Together e provedores locais
-- **Sistema de ferramentas extensível** — Bash, leitura/escrita/edição de arquivos, glob, grep, sub-agentes
-- **REPL interativo** — Terminal UI com JLine, markdown rendering, histórico de comandos
-- **Model Context Protocol (MCP)** — Integração com servidores MCP via transporte stdio
+- **Sistema de ferramentas extensível** — Bash (com sandbox e processos em background), leitura/escrita/edição de arquivos, glob, grep, web fetch/search, notebooks Jupyter, todo list, git worktrees, notificações push e sub-agentes
+- **REPL interativo** — Terminal UI com JLine, markdown rendering, histórico de comandos, prompts interativos de permissão e cancelamento de turno com Ctrl+C
+- **Plan mode** — `/permissions plan` ativa modo somente-planejamento; o modelo apresenta o plano via `ExitPlanMode` e só executa após aprovação
+- **Model Context Protocol (MCP)** — Integração com servidores MCP via stdio (subprocesso) ou HTTP/SSE (servidores remotos)
+- **Hooks** — `PreToolUse`/`PostToolUse`/`UserPromptSubmit` configurados em `.claude/settings.json` (projeto ou `~/.claude/`)
+- **Customização** — Comandos slash em `.claude/commands/*.md`, sub-agentes em `.claude/agents/*.md`, CLAUDE.md carregado automaticamente no system prompt
 - **Plugins** — Descoberta automática via ServiceLoader e JARs em `~/.claude/plugins/`
-- **Modo headless** — Servidor JSON-over-TCP para integração programática
-- **Gerenciamento de sessões** — Persistência de conversas, tracking de custo por tokens
+- **Modo headless** — Servidor JSON-over-TCP para integração programática (loopback por padrão, autenticação por token opcional)
+- **Gerenciamento de sessões** — Persistência de conversas com retomada via `--continue`/`--resume`, tracking de custo por tokens
 
 ## Requisitos
 
@@ -53,13 +56,17 @@ openclaude [opções] [prompt]
 | `-p, --print` | Modo print: prompt único, sem REPL |
 | `--serve` | Iniciar servidor headless JSON-over-TCP |
 | `--port <PORT>` | Porta do servidor headless (padrão: 9818) |
+| `-c, --continue` | Retoma a sessão mais recente (modo REPL) |
+| `--resume <sessionId>` | Retoma uma sessão salva pelo ID (modo REPL) |
+| `--no-claude-md` | Desabilita o carregamento automático de CLAUDE.md |
+| `--dangerously-skip-permissions` | Auto-aprova todas as chamadas de ferramenta na sessão |
 
 ### Modos de Execução
 
 - **REPL interativo** (padrão) — Interface de terminal completa com comandos
 - **Prompt único** — Passa o prompt como argumento, recebe resposta e encerra
 - **Print mode** (`-p`) — Similar ao prompt único, saída otimizada para piping
-- **Servidor headless** (`--serve`) — Servidor TCP para integração com IDEs e ferramentas
+- **Servidor headless** (`--serve`) — Servidor TCP para integração com IDEs e ferramentas. Escuta apenas loopback por padrão; para expor outra interface, defina `OPENCLAUDE_SERVE_HOST` (o que passa a exigir `OPENCLAUDE_SERVE_TOKEN` para autenticação dos clientes)
 
 ### Comandos do REPL
 
@@ -69,7 +76,9 @@ openclaude [opções] [prompt]
 | `/model` | | Mostra modelo e provedor atual |
 | `/tools` | | Lista ferramentas disponíveis |
 | `/cost` | | Mostra uso de tokens e custo estimado |
-| `/permissions` | `perms` | Gerencia permissões de ferramentas |
+| `/permissions` | `perms` | Gerencia permissões de ferramentas (`auto`, `default`, `plan`, `deny`) |
+| `/memory` | `claude-md` | Mostra os arquivos CLAUDE.md carregados |
+| `/docs` | `documentation` | Gera documentação técnica completa |
 | `/status` | | Mostra status da sessão |
 | `/diff` | | Mostra git diff de mudanças não commitadas |
 | `/export` | | Exporta conversa para markdown |
@@ -124,18 +133,30 @@ core       → Modelos de dados, config, permissões, sessões
 
 | Ferramenta | Descrição |
 |------------|-----------|
-| `BashTool` | Executa comandos bash/cmd (timeout 2min, trunca saída em 512KB) |
-| `FileReadTool` | Lê conteúdo de arquivos |
-| `FileWriteTool` | Escreve arquivos (cria diretórios se necessário) |
-| `FileEditTool` | Edita seções específicas de arquivos |
-| `GlobTool` | Busca arquivos por padrão glob |
+| `BashTool` | Executa comandos bash/cmd com sandbox de segurança; suporta `run_in_background` |
+| `FileReadTool` | Lê arquivos: texto, imagens, PDFs e notebooks Jupyter |
+| `FileWriteTool` | Escreve arquivos (sobrescrever exige leitura prévia na sessão) |
+| `FileEditTool` | Substituição exata de strings em arquivos |
+| `GlobTool` | Busca arquivos por padrão glob (ordenados por mtime) |
 | `GrepTool` | Busca conteúdo com regex (estilo ripgrep) |
-| `AgentTool` | Cria e executa sub-agentes |
+| `WebFetchTool` | Busca URL e converte HTML em markdown (cache de 5min) |
+| `WebSearchTool` | Busca web via Brave Search API (requer `BRAVE_SEARCH_API_KEY`) |
+| `AgentTool` | Cria e executa sub-agentes (tipo, modelo, background, worktree) |
+| `MonitorTool` / `KillProcessTool` | Observa e encerra processos em background |
+| `TodoWriteTool` | Lista de tarefas da sessão |
+| `NotebookEditTool` | Edita células de notebooks Jupyter (`.ipynb`) |
+| `ToolSearchTool` | Carregamento sob demanda de schemas em catálogos grandes de ferramentas |
+| `PushNotificationTool` | Notificações via stdout, libnotify, webhook ou Slack |
+| `EnterWorktreeTool` / `ExitWorktreeTool` | Move a sessão para dentro/fora de um git worktree temporário |
+| `ExitPlanModeTool` | Fluxo de saída do plan mode com aprovação do plano |
 
 ### Extensibilidade
 
 - **Plugins**: implemente a interface `Plugin` e coloque o JAR em `~/.claude/plugins/`
-- **MCP**: configure servidores MCP no arquivo `.mcp.json` do projeto
+- **MCP**: configure servidores MCP no arquivo `.mcp.json` do projeto — stdio (subprocesso) ou HTTP/SSE para servidores remotos (config só com `url` assume SSE)
+- **Comandos slash customizados**: arquivos markdown em `.claude/commands/*.md` (projeto) ou `~/.claude/commands/*.md`
+- **Sub-agentes customizados**: definições markdown em `.claude/agents/*.md` (projeto) ou `~/.claude/agents/*.md`
+- **Hooks**: `PreToolUse`/`PostToolUse`/`UserPromptSubmit` em `.claude/settings.json`
 - **Provedores LLM**: qualquer API compatível com OpenAI pode ser usada via `OPENAI_BASE_URL`
 
 ## Dependências Principais
@@ -168,3 +189,6 @@ core       → Modelos de dados, config, permissões, sessões
 |-----------|----------|
 | `~/.claude/sessions/` | Sessões salvas em JSON |
 | `~/.claude/plugins/` | JARs de plugins |
+| `~/.claude/commands/` ou `.claude/commands/` | Comandos slash customizados (markdown) |
+| `~/.claude/agents/` ou `.claude/agents/` | Sub-agentes customizados (markdown) |
+| `~/.claude/settings.json` ou `.claude/settings.json` | Hooks e notificações |

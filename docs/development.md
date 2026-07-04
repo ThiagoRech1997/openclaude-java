@@ -46,6 +46,23 @@ JUnit 5 (Jupiter) is configured in the root `build.gradle.kts`.
 
 Tests go in `<module>/src/test/java/dev/openclaude/<module>/`.
 
+### Smoke tests (parity harness)
+
+`smoke/runner.sh` runs the same prompt set through OpenClaude (print mode) and
+Claude Code (`claude -p`) with the same model, producing a side-by-side report in
+`smoke/out/<timestamp>/report.md`. It is not a pass/fail suite — a human reads the
+report before releases or big changes.
+
+```bash
+smoke/runner.sh                                        # all cases
+smoke/runner.sh --filter multi-step --model claude-haiku-4-5
+smoke/runner.sh --skip-claude                          # OpenClaude only
+```
+
+Cases are markdown files in `smoke/prompts/` with frontmatter (`model`, `tags`) and
+`# Setup` / `# Prompt` / `# Expected` sections. See [smoke/README.md](../smoke/README.md)
+for details and how to add cases.
+
 ## Project Layout
 
 ```

@@ -118,3 +118,7 @@ These sealed interfaces are the backbone of the type system — understand them 
 ## Testing
 
 JUnit 5 (Jupiter). Tests go in `<module>/src/test/java/`. The test framework is configured in the root `build.gradle.kts` with `useJUnitPlatform()`.
+
+## Smoke Harness (parity checks)
+
+`smoke/runner.sh` runs the same prompt set through OpenClaude (print mode) and Claude Code (`claude -p`) and produces a side-by-side report in `smoke/out/<timestamp>/report.md` — a human-reviewed parity check, not a pass/fail suite. Cases are markdown files in `smoke/prompts/` with frontmatter (`model`, `tags`) and `# Setup` / `# Prompt` / `# Expected` sections; each case runs in its own scratch directory. Flags: `--filter <tag>`, `--model <id>`, `--skip-claude`. See `smoke/README.md`.

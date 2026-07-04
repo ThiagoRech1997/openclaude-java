@@ -58,7 +58,7 @@ flowchart TD
     F --> G[Register in ToolRegistry]
 ```
 
-On shutdown, `PluginLoader.unloadAll()` calls `onUnload()` on each plugin.
+On shutdown, `PluginLoader.unloadAll()` calls `onUnload()` on each plugin and closes the `URLClassLoader`s created for JAR plugins.
 
 ## Creating a Plugin
 
@@ -133,4 +133,5 @@ The plugin will be loaded automatically on the next OpenClaude startup.
 
 - If a plugin's `onLoad()` throws an exception, it is skipped with a warning
 - If a plugin's `tools()` throws, it is skipped with a warning
+- A malformed ServiceLoader provider (one that throws `ServiceConfigurationError`, e.g. a broken `META-INF/services` entry or a JAR compiled against a missing class) is skipped with a warning instead of aborting startup
 - Plugin loading errors do not prevent the agent from starting

@@ -10,7 +10,8 @@ OpenClaude Java supports 10+ LLM providers through a unified `LlmClient` interfa
 switch (config.provider()) {
     case "anthropic"                                          -> AnthropicClient
     case "ollama"                                             -> OllamaClient
-    case "openai", "azure", "deepseek", "groq", "mistral",
+    case "azure"                                              -> OpenAIClient (Azure auth mode)
+    case "openai", "deepseek", "groq", "mistral",
          "together", "local", "openrouter", "github"          -> OpenAIClient
     default -> guess by base URL (anthropic.com? -> Anthropic : OpenAI)
 }
@@ -36,7 +37,7 @@ switch (config.provider()) {
 
 `AppConfig.load()` detects the provider from environment variables in this order:
 
-1. **Ollama** — if `OLLAMA_BASE_URL` or `OLLAMA_HOST` is set
+1. **Ollama** — if `OLLAMA_BASE_URL` or `OLLAMA_HOST` is set. Following Ollama convention, the value may omit the scheme (e.g. `OLLAMA_HOST=0.0.0.0:11434`) — `http://` is prepended automatically
 2. **OpenRouter** — if `OPENROUTER_API_KEY` is set
 3. **GitHub Models** — if `GITHUB_TOKEN` + `CLAUDE_CODE_USE_GITHUB=1`
 4. **OpenAI** — if `CLAUDE_CODE_USE_OPENAI=1`, or `OPENAI_API_KEY` set without `ANTHROPIC_API_KEY`
@@ -44,6 +45,8 @@ switch (config.provider()) {
 6. **Default: Anthropic** — uses `ANTHROPIC_API_KEY`
 
 ## Client Implementations
+
+All clients omit `temperature` from the request unless it is explicitly set on the `LlmRequest` (it is nullable) — the provider's default is used, which also keeps models that reject the parameter (e.g. OpenAI o-series) working.
 
 ### AnthropicClient
 
@@ -72,7 +75,7 @@ switch (config.provider()) {
 - `content_block_delta` -> `StreamEvent.TextDelta` / `ThinkingDelta` / `ToolInputDelta`
 - `content_block_stop` -> `StreamEvent.ContentBlockStop`
 - `message_delta` -> `StreamEvent.MessageDelta` (stop_reason + usage)
-- `message_stop` -> (stream ends)
+- `message_stop` -> `StreamEvent.MessageComplete` with the fully assembled `AssistantMessage` (text, thinking, and tool_use blocks)
 - `error` -> `StreamEvent.Error`
 
 **Features:** Thinking/reasoning content, cache usage tracking, native tool_use format.
@@ -87,11 +90,13 @@ switch (config.provider()) {
 
 **Key differences from Anthropic:**
 - System prompt is a `role: system` message (not a top-level field)
-- Tools use `function` format with `function_call` in deltas
+- Tools use `function` format; streamed `tool_calls` deltas are accumulated per `index`, so parallel tool calls in one response are fully supported
 - Tool results are `role: tool` messages with `tool_call_id`
 - No native thinking/reasoning content support
 
 **Covers:** OpenAI, Azure, DeepSeek, Groq, Mistral, Together, OpenRouter, GitHub Models, LM Studio, and any OpenAI-compatible API.
+
+**Azure OpenAI:** when the provider is `azure`, the client authenticates with the `api-key` header instead of `Authorization: Bearer`, and appends `?api-version=<version>` to the request URL (default `2024-10-21`, override with `AZURE_OPENAI_API_VERSION`). The base URL must include the deployment path, e.g. `https://<resource>.openai.azure.com/openai/deployments/<name>`.
 
 ### OllamaClient
 
@@ -104,6 +109,8 @@ switch (config.provider()) {
 
 The final line has `"done": true` with total token counts.
 
+**Tool calling:** native Ollama `tool_calls` in streamed messages are parsed and emitted as `ToolUseStart`/`ToolInputDelta` events (multiple parallel calls supported). Tool results are sent back as `role: tool` messages, which Ollama matches to the assistant's `tool_calls` by order.
+
 ## Default Models
 
 | Provider | Default Model |
@@ -115,6 +122,18 @@ The final line has `"done": true` with total token counts.
 | GitHub Models | `gpt-4o` |
 
 Override with `OPENCLAUDE_MODEL` or provider-specific vars (`ANTHROPIC_MODEL`, `OPENAI_MODEL`, `OLLAMA_MODEL`).
+
+### Model Aliases
+
+Where a short model alias is accepted (e.g. the Agent tool's `model` override for sub-agents), `ModelAlias` resolves:
+
+| Alias | Model ID |
+|-------|----------|
+| `sonnet` | `claude-sonnet-4-20250514` |
+| `opus` | `claude-opus-4-20250514` |
+| `haiku` | `claude-3-5-haiku-20241022` |
+
+Unknown aliases are passed through unchanged.
 
 ## Adding a New Provider
 
